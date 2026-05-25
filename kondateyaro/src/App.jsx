@@ -232,17 +232,12 @@ const db={
 /* ══════════════════════════════════════════
    AI
 ══════════════════════════════════════════ */
-const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_KEY || "";
+
 
 async function callAI(sys,msg,max=2000){
-  const r=await fetch("https://api.anthropic.com/v1/messages",{
+ const r=await fetch("/api/claude",{
     method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key": ANTHROPIC_KEY,
-      "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers:{"Content-Type":"application/json"},
     body:JSON.stringify({model:MODEL,max_tokens:max,system:sys,messages:[{role:"user",content:msg}]})
   });
   const d=await r.json();
