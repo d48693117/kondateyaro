@@ -1,0 +1,14 @@
+{
+  "name": "こんだて野郎",
+  "short_name": "こんだて野郎",
+  "description": "週間献立・買い物リスト管理アプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F8FA",
+  "theme_color": "#1B5E20",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
