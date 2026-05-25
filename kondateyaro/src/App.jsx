@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from "react";
 /* ══════════════════════════════════════════
    CONSTANTS
 ══════════════════════════════════════════ */
-const MODEL  = "claude-sonnet-4-20250514";
+const MODEL  = "claude-sonnet-4-5";
 const DB_KEY = "kondateyaro-v1";
 const DAYS   = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
 const DAY_JP = {monday:"月",tuesday:"火",wednesday:"水",thursday:"木",friday:"金",saturday:"土",sunday:"日"};
