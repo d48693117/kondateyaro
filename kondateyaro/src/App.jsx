@@ -458,7 +458,7 @@ ${extra}`;
   const props={st,save,notify,genPlan,replaceMeal,removeSlot,handleDrop,setFloor,setSc,busy,kw,setKw};
 
   return(
-    <div style={{maxWidth:480,margin:"0 auto",minHeight:"100vh",minHeight:"100dvh",background:"#F7F8FA",fontFamily:"'Noto Sans JP',sans-serif",paddingBottom:72,position:"relative"}}>
+    <div style={{maxWidth:480,margin:"0 auto",minHeight:"100dvh",background:"#F7F8FA",fontFamily:"'Noto Sans JP',sans-serif",paddingBottom:72,position:"relative"}}>
       <style>{CSS}</style>
       {busy&&<Overlay msg={bMsg}/>}
       {toast&&<Toast msg={toast}/>}
