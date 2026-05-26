@@ -397,8 +397,8 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
     setSwapSrc(null);
   };
 
-  // 一品ごとのドラッグ＆ドロップ（グループ間・同グループ内どちらも対応）
-  const handleDishSwap=(srcGi,srcSlot,dstGi,dstSlot)=>{
+  // 一品ごとのドラッグ＆ドロップ・削除（deleteFlag=trueのとき空にする）
+  const handleDishSwap=(srcGi,srcSlot,dstGi,dstSlot,deleteFlag=false)=>{
     if(!plan) return;
     const getVal=(gi,slot)=>{
       const g=plan.groups[gi];
@@ -418,11 +418,15 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
       }
       return groups.map((gr,i)=>i===gi?g:gr);
     };
-    const srcVal=getVal(srcGi,srcSlot);
-    const dstVal=getVal(dstGi,dstSlot);
     let newGroups=[...plan.groups];
-    newGroups=setVal(newGroups,srcGi,srcSlot,dstVal);
-    newGroups=setVal(newGroups,dstGi,dstSlot,srcVal);
+    if(deleteFlag){
+      newGroups=setVal(newGroups,srcGi,srcSlot,"");
+    } else {
+      const srcVal=getVal(srcGi,srcSlot);
+      const dstVal=getVal(dstGi,dstSlot);
+      newGroups=setVal(newGroups,srcGi,srcSlot,dstVal);
+      newGroups=setVal(newGroups,dstGi,dstSlot,srcVal);
+    }
     save({plan:{...plan,groups:newGroups}});
   };
 
@@ -464,44 +468,49 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
 
 /* 料理カード（変更ポップアップ内にフリーワード＋カテゴリ除外あり） */
 function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,onSwap,onDishSwap}){
-  const [showSheet,setShowSheet]=useState(false);
+  const [dragOver,setDragOver]=useState(null);
+  // dishAction: {slotKey, name} → DishActionSheetを開く
+  const [dishAction,setDishAction]=useState(null);
+  // 変更シート用
+  const [changeSheet,setChangeSheet]=useState(null); // {slotKey, name}
   const [changeWanted,setChangeWanted]=useState("");
   const [excludeCat,setExcludeCat]=useState("");
-  const [dragOver,setDragOver]=useState(null); // dragged-over slot key
   const cats=["肉","魚","卵・豆腐","野菜メイン","麺・パスタ","丼","その他"];
-
-  const doChange=()=>{ onChangeMain(gi,group.main,changeWanted,excludeCat); setShowSheet(false); setChangeWanted(""); setExcludeCat(""); };
 
   const avgScore=dishInfo?.scores?.length?avg(dishInfo.scores).toFixed(1):null;
   const diff=dishInfo?.difficulty||group.diff||0;
 
-  // ドラッグ＆ドロップ handlers
-  // slot key: "main" | "side0" | "side1"
+  // ドラッグ＆ドロップ
   const handleDragStart=(e,slotKey)=>{
-    e.dataTransfer.setData("text/plain", JSON.stringify({gi, slotKey}));
+    e.dataTransfer.setData("text/plain",JSON.stringify({gi,slotKey}));
     e.dataTransfer.effectAllowed="move";
   };
-  const handleDragOver=(e,slotKey)=>{
-    e.preventDefault();
-    e.dataTransfer.dropEffect="move";
-    setDragOver(slotKey);
-  };
+  const handleDragOver=(e,slotKey)=>{ e.preventDefault(); setDragOver(slotKey); };
   const handleDrop=(e,slotKey)=>{
-    e.preventDefault();
-    setDragOver(null);
+    e.preventDefault(); setDragOver(null);
     try{
       const src=JSON.parse(e.dataTransfer.getData("text/plain"));
-      if(src.gi===gi && src.slotKey===slotKey) return; // same slot
-      onDishSwap(src.gi, src.slotKey, gi, slotKey);
+      if(src.gi===gi&&src.slotKey===slotKey) return;
+      onDishSwap(src.gi,src.slotKey,gi,slotKey);
     }catch(err){}
   };
-  const handleDragLeave=()=>setDragOver(null);
 
-  // スロット名取得
   const getSlotName=key=>{
     if(key==="main") return group.main||"";
     const idx=Number(key.replace("side",""));
     return group.sides?.[idx]||"";
+  };
+
+  const doChange=()=>{
+    if(!changeSheet) return;
+    onChangeMain(gi, changeSheet.name, changeWanted, excludeCat);
+    setChangeSheet(null); setChangeWanted(""); setExcludeCat("");
+  };
+
+  const doDelete=(slotKey)=>{
+    if(!confirm("この料理を削除しますか？")) return;
+    onDishSwap(gi, slotKey, gi, slotKey, true); // delete flag
+    setDishAction(null);
   };
 
   const SlotRow=({slotKey,label})=>{
@@ -513,14 +522,8 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
         onDragStart={e=>handleDragStart(e,slotKey)}
         onDragOver={e=>handleDragOver(e,slotKey)}
         onDrop={e=>handleDrop(e,slotKey)}
-        onDragLeave={handleDragLeave}
-        style={{
-          display:"flex",alignItems:"center",gap:6,marginBottom:4,
-          padding:"5px 8px",borderRadius:8,cursor:"grab",
-          background:isOver?"#E3F2FD":"transparent",
-          border:isOver?"1.5px dashed #1565C0":"1.5px solid transparent",
-          transition:"background .1s"
-        }}
+        onDragLeave={()=>setDragOver(null)}
+        style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,padding:"5px 8px",borderRadius:8,cursor:"grab",background:isOver?"#E3F2FD":"transparent",border:isOver?"1.5px dashed #1565C0":"1.5px solid transparent",transition:"background .1s"}}
       >
         <span style={{fontSize:11,color:"#BDBDBD",userSelect:"none"}}>⠿</span>
         {slotKey==="main"?(
@@ -532,45 +535,68 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
         ):(
           <span style={{fontSize:13,color:"#616161",flex:1}}>{label}：{name||"（空）"}</span>
         )}
-        {name&&<button onClick={()=>onPickRecipe(name)} style={{padding:"2px 7px",background:"#E8F5E9",color:"#2E7D32",border:"1px solid #A5D6A7",borderRadius:6,fontSize:11,fontWeight:600,flexShrink:0}}>🔍</button>}
+        {name&&(
+          <button
+            onClick={e=>{e.stopPropagation();setDishAction({slotKey,name});}}
+            style={{padding:"3px 9px",background:"#E8F5E9",color:"#2E7D32",border:"1px solid #A5D6A7",borderRadius:6,fontSize:13,flexShrink:0}}
+          >🔍</button>
+        )}
       </div>
     );
   };
 
   return(<>
-    {showSheet&&<BottomSheet title={"「"+group.main+"」を変更"} onClose={()=>setShowSheet(false)}>
-      <div style={{marginBottom:10}}>
-        <Lbl>使いたい食材（任意）</Lbl>
-        <input value={changeWanted} onChange={e=>setChangeWanted(e.target.value)} placeholder="例：鶏もも、キャベツ" autoFocus
-          style={{width:"100%",padding:"10px 12px",border:"2px solid #E0E0E0",borderRadius:8,fontSize:14}}/>
-      </div>
-      <div style={{marginBottom:14}}>
-        <Lbl>除外したいカテゴリ（任意）</Lbl>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {cats.map(cat=>(<button key={cat} onClick={()=>setExcludeCat(excludeCat===cat?"":cat)} style={{padding:"6px 12px",borderRadius:16,border:"1.5px solid "+(excludeCat===cat?"#C62828":"#E0E0E0"),background:excludeCat===cat?"#FFEBEE":"#F5F5F5",color:excludeCat===cat?"#C62828":"#757575",fontSize:13,fontWeight:500}}>{cat}</button>))}
+    {/* 一品アクションシート */}
+    {dishAction&&(
+      <BottomSheet title={"「"+dishAction.name+"」"} onClose={()=>setDishAction(null)}>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8}}>
+          {(INIT_SETTINGS.recipe_sites).map(site=>(
+            <button key={site.id} onClick={()=>{window.open(site.url.replace("{dish}",encodeURIComponent(dishAction.name)),"_blank","noopener,noreferrer");setDishAction(null);}}
+              style={{padding:"13px 16px",background:"#F7F8FA",border:"1.5px solid #E0E0E0",borderRadius:10,textAlign:"left",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:18}}>{site.id==="nadia"?"👩‍🍳":site.id==="cookpad"?"🍳":site.id==="youtube"?"▶️":"📸"}</span>{site.label}でレシピを探す
+            </button>
+          ))}
+          <button onClick={()=>{setDishAction(null);setChangeSheet({slotKey:dishAction.slotKey,name:dishAction.name});}}
+            style={{padding:"13px 16px",background:"#E8F5E9",border:"1.5px solid #A5D6A7",borderRadius:10,textAlign:"left",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",gap:10}}>
+            🔄 この料理を変更（AI提案）
+          </button>
+          <button onClick={()=>doDelete(dishAction.slotKey)}
+            style={{padding:"13px 16px",background:"#FFEBEE",border:"1.5px solid #FFCDD2",borderRadius:10,textAlign:"left",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",gap:10}}>
+            🗑️ この料理を削除
+          </button>
         </div>
-      </div>
-      <BtnFull label="別の料理に変更" color={gInfo.color} onClick={doChange}/>
-      <button onClick={()=>setShowSheet(false)} style={{marginTop:10,width:"100%",padding:10,border:"none",background:"none",color:"#9E9E9E",fontSize:14}}>キャンセル</button>
-    </BottomSheet>}
+        <button onClick={()=>setDishAction(null)} style={{width:"100%",padding:10,border:"none",background:"none",color:"#9E9E9E",fontSize:14}}>キャンセル</button>
+      </BottomSheet>
+    )}
+    {/* 変更シート */}
+    {changeSheet&&(
+      <BottomSheet title={"「"+changeSheet.name+"」を変更"} onClose={()=>setChangeSheet(null)}>
+        <div style={{marginBottom:10}}>
+          <Lbl>使いたい食材（任意）</Lbl>
+          <input value={changeWanted} onChange={e=>setChangeWanted(e.target.value)} placeholder="例：鶏もも、キャベツ" autoFocus
+            style={{width:"100%",padding:"10px 12px",border:"2px solid #E0E0E0",borderRadius:8,fontSize:14}}/>
+        </div>
+        <div style={{marginBottom:14}}>
+          <Lbl>除外したいカテゴリ（任意）</Lbl>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {cats.map(cat=>(<button key={cat} onClick={()=>setExcludeCat(excludeCat===cat?"":cat)}
+              style={{padding:"6px 12px",borderRadius:16,border:"1.5px solid "+(excludeCat===cat?"#C62828":"#E0E0E0"),background:excludeCat===cat?"#FFEBEE":"#F5F5F5",color:excludeCat===cat?"#C62828":"#757575",fontSize:13,fontWeight:500}}>{cat}</button>))}
+          </div>
+        </div>
+        <BtnFull label="別の料理に変更" color={gInfo.color} onClick={doChange}/>
+        <button onClick={()=>setChangeSheet(null)} style={{marginTop:10,width:"100%",padding:10,border:"none",background:"none",color:"#9E9E9E",fontSize:14}}>キャンセル</button>
+      </BottomSheet>
+    )}
 
     <div className="fade-in" style={{background:"white",borderRadius:12,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
-      <div style={{background:gInfo.color,color:"white",padding:"8px 14px",fontWeight:700,fontSize:13}}>{gInfo.label}</div>
+      <div style={{background:gInfo.color,color:"white",padding:"8px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontWeight:700,fontSize:13}}>{gInfo.label}</span>
+        <button onClick={onSwap} style={{padding:"4px 10px",background:"rgba(255,255,255,.2)",color:"white",border:"1px solid rgba(255,255,255,.4)",borderRadius:6,fontSize:12,fontWeight:600}}>↕ 入替</button>
+      </div>
       <div style={{padding:"10px 14px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div style={{flex:1}}>
-            <SlotRow slotKey="main" label="主菜"/>
-            {(group.sides||[]).map((_,si)=>(
-              <SlotRow key={si} slotKey={"side"+si} label={"副菜"+(si+1)}/>
-            ))}
-            <div style={{fontSize:10,color:"#BDBDBD",marginTop:2}}>⠿ ドラッグで並び替え・別グループとも入替可</div>
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:10,flexShrink:0}}>
-            <button onClick={()=>setShowSheet(true)} style={{padding:"5px 10px",background:gInfo.light,color:gInfo.color,border:"1.5px solid "+gInfo.color,borderRadius:7,fontSize:12,fontWeight:700}}>変更</button>
-            <button onClick={onSwap} style={{padding:"5px 10px",background:"#F5F5F5",color:"#616161",border:"1.5px solid #E0E0E0",borderRadius:7,fontSize:12,fontWeight:600}}>↕入替</button>
-            <button onClick={onDelete} style={{padding:"5px 10px",background:"#FFEBEE",color:"#C62828",border:"1.5px solid #EF9A9A",borderRadius:7,fontSize:11,fontWeight:600}}>削除</button>
-          </div>
-        </div>
+        <SlotRow slotKey="main" label="主菜"/>
+        {(group.sides||[]).map((_,si)=>(<SlotRow key={si} slotKey={"side"+si} label={"副菜"+(si+1)}/>))}
+        <div style={{fontSize:10,color:"#BDBDBD",marginTop:2}}>⠿ ドラッグで並び替え　🔍 タップで操作</div>
       </div>
     </div>
   </>);
@@ -885,14 +911,11 @@ function DayGroupEditor({dayGroups,onChange}){
 
   const cycleDayGroup=day=>{
     const curGid=getGid(day);
-    // 現在存在するグループIDの一覧
     const existingGids=[...new Set(DAYS.map(d=>dayGroups[d]||1))].sort((a,b)=>a-b);
     const maxGid=existingGids[existingGids.length-1];
-    // 次のグループ: 現在のGID+1。最大+1（新グループ）まで可。7を超えたら1に戻る
-    const canAdd=existingGids.length < GROUP_COLORS.length;
-    let nextGid=curGid+1;
-    if(nextGid > maxGid+1) nextGid=1;
-    if(!canAdd && nextGid > maxGid) nextGid=1;
+    // G7を超えたら必ずG1に戻る。新グループはmaxGid+1（上限7）まで
+    const maxAllowed=Math.min(maxGid+1, GROUP_COLORS.length);
+    const nextGid=curGid>=maxAllowed ? 1 : curGid+1;
     onChange({...dayGroups,[day]:nextGid});
   };
 
@@ -1041,8 +1064,15 @@ function CustomRecipesEditor({customRecipes,onChange,notify}){
     </div>))}
     {showForm?(
       <div style={{background:"#F7F8FA",borderRadius:10,padding:"12px"}}>
-        {[{k:"name",ph:"料理名 *"},{k:"ingredients",ph:"食材（例：鶏もも・玉ねぎ）"},{k:"url",ph:"レシピURL（任意）"},{k:"score",ph:"評価 1〜5（任意）"}].map(({k,ph})=>(<input key={k} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} type={k==="score"?"number":"text"} min="1" max="5"
+        {[{k:"name",ph:"料理名 *"},{k:"ingredients",ph:"食材（例：鶏もも・玉ねぎ）"},{k:"url",ph:"レシピURL（任意）"}].map(({k,ph})=>(<input key={k} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} placeholder={ph}
           style={{display:"block",width:"100%",padding:"9px 11px",border:"2px solid #E0E0E0",borderRadius:8,fontSize:14,marginBottom:8}}/>))}
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:12,color:"#9E9E9E",marginBottom:5}}>評価（任意）</div>
+          <div style={{display:"flex",gap:6}}>
+            {[1,2,3,4,5].map(s=>(<button key={s} type="button" onClick={()=>setForm(f=>({...f,score:f.score===s?0:s}))}
+              style={{flex:1,padding:"8px 4px",border:"2px solid "+(form.score>=s?"#FB8C00":"#E0E0E0"),borderRadius:8,background:form.score>=s?"#FFF8E1":"white",fontSize:18,fontWeight:700,color:form.score>=s?"#FB8C00":"#BDBDBD"}}>★</button>))}
+          </div>
+        </div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={add} style={{flex:1,padding:"10px",background:"#2E7D32",color:"white",border:"none",borderRadius:8,fontSize:14,fontWeight:700}}>登録</button>
           <button onClick={()=>setShowForm(false)} style={{flex:1,padding:"10px",background:"white",color:"#9E9E9E",border:"1px solid #E0E0E0",borderRadius:8,fontSize:14}}>キャンセル</button>
