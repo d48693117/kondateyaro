@@ -300,12 +300,13 @@ typeは"ingredient"か"seasoning"のみ。`;
     const total=servings*dayCount;
     const perServing=iMem[item.name];
     const qty=perServing?`${Math.round(perServing*total*10)/10}${iMem[item.name+"_unit"]||"g"}`:item.qty;
+    const isSeasoning=item.type==="seasoning";
     return {
       id:`item_${Date.now()}_${i}`,
       groupIdx:item.groupIdx??0, dishType:item.dishType||"main", dishName:item.dishName||"",
-      name:item.name, qty, type:item.type||"ingredient",
+      name:item.name, qty:isSeasoning?"":qty, type:item.type||"ingredient",
       floor:(sortMem||{})[item.name]||null,
-      excluded:item.type==="seasoning" // 調味料はデフォルトOFF
+      excluded:isSeasoning // 調味料はデフォルトOFF
     };
   });
 }
@@ -318,11 +319,11 @@ function buildLINEMessage(plan,session,sortCats){
       const label=g.days.map(d=>DAY_JP[d]).join("・");
       msg+=`\n【${label}】\n🍽 主菜: ${g.main}\n`;
       if(session?.items){
-        const mainIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded);
+        const mainIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded&&i.type==="ingredient");
         if(mainIng.length) msg+=`  食材: ${mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
       }
       (g.sides||[]).forEach((side,si)=>{
-        const sideIng=(session?.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded);
+        const sideIng=(session?.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
         msg+=`🥗 副菜: ${side}\n`;
         if(sideIng.length) msg+=`  食材: ${sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
       });
@@ -1033,7 +1034,7 @@ function Step4({sess,plan,sortCats,save,notify,groups}){
       <div style={{background:"white",borderRadius:12,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         {plan.groups.map((g,gi)=>{
           const gInfo=groups[gi]||groups[0];
-          const mainIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded);
+          const mainIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded&&i.type==="ingredient");
           return(<div key={gi} style={{padding:"11px 14px",borderBottom:gi<plan.groups.length-1?"1px solid #F5F5F5":"none"}}>
             <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:3}}>
               <span style={{fontSize:11,fontWeight:700,color:gInfo.color,minWidth:56,flexShrink:0}}>{gInfo.label}</span>
@@ -1041,7 +1042,7 @@ function Step4({sess,plan,sortCats,save,notify,groups}){
             </div>
             {mainIng.length>0&&<div style={{fontSize:11,color:"#9E9E9E",marginLeft:64,marginBottom:3}}>食材：{mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
             {(g.sides||[]).map((side,si)=>{
-              const sideIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded);
+              const sideIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
               return(<div key={si} style={{marginLeft:64}}>
                 <span style={{fontSize:12,color:"#757575"}}>🥗 {side}</span>
                 {sideIng.length>0&&<div style={{fontSize:11,color:"#BDBDBD"}}>食材：{sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
