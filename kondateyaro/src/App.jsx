@@ -1081,9 +1081,8 @@ function Step4({sess,plan,sortCats,save,notify,groups,dishes}){
       {included.filter(i=>!i.floor).map((it,i)=>(<div key={it.id} style={{padding:"9px 14px",fontSize:14,borderBottom:"1px solid #F5F5F5"}}>{it.name}{it.qty?` — ${it.qty}`:""}</div>))}
     </div>)}
 
-    <div style={{marginTop:18,display:"flex",flexDirection:"column",gap:8}}>
-      <BtnFull label="📲 LINEに送信" color="#2E7D32" onClick={handleSend}/>
-      <BtnFull label="📋 コピーしてLINEに貼付" color="#5C6BC0" onClick={handleCopy} small/>
+    <div style={{marginTop:18}}>
+      <BtnFull label="📋 LINEに貼付用コピー" color="#2E7D32" onClick={handleCopy}/>
     </div>
   </div>);
 }
