@@ -184,6 +184,7 @@ NG食材（絶対に使わない）: ${ngFoods}
 登録レシピ（優先）: ${customList}${wantedLine}
 ルール:
 ・夜はmain1品+sides2品（副菜は家庭的なもの：ひじき煮・ポテサラ・冷奴・卵焼き等）
+・汁物設定がfalseのグループは副菜に味噌汁・豚汁・スープ・お吸い物などの汁物を絶対に含めない
 ・土日夜は丼もの（親子丼・牛丼・カツ丼等）
 ・同じ料理を週内で繰り返さない
 ・catは「肉/魚/卵・豆腐/野菜メイン/麺・パスタ/丼/その他」
@@ -195,7 +196,14 @@ NG食材（絶対に使わない）: ${ngFoods}
   const txt=await callAI(sys,`今週の献立。グループ: ${groups.map(g=>g.label).join("、")}（${servings}人家族）`,2000);
   const clean=txt.replace(/```json|```/g,"").trim();
   const groupData=JSON.parse(clean);
-  return {weekStart:weekStartStr(), groups:groupData.map(g=>({...g,score:null}))};
+  const mealCfg=st.settings?.meal_config||INIT_SETTINGS.meal_config;
+  const SOUP_PATTERN=/汁$|スープ$|お吸い物|汁物/;
+  const filtered=groupData.map(g=>{
+    if(mealCfg.dinner?.soup) return g; // 汁物ありならフィルターしない
+    const sides=(g.sides||[]).filter(s=>!SOUP_PATTERN.test(s));
+    return {...g, sides};
+  });
+  return {weekStart:weekStartStr(), groups:filtered.map(g=>({...g,score:null}))};
 }
 
 async function buildShoppingItems(plan,sortMem,settings,dishes,ingredientMem){
