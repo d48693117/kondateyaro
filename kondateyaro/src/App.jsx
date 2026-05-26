@@ -282,6 +282,17 @@ NG食材: ${ngFoods}
   const merged=groups.map((g,i)=>{
     const aiG=groupData[i]||{};
     const sides=(aiG.sides||[]).filter(s=>!SOUP_PATTERN.test(s)||mealCfg.dinner?.soup);
+
+    // 冷凍食品強制適用: グループの代表曜日が frozen_meals に含まれる場合
+    const repDay=g.days[0];
+    const isFrozenGroup=frozen_meals.some(k=>{
+      const[d,meal]=k.split("_");
+      return g.days.includes(d) && meal==="dinner";
+    });
+    if(isFrozenGroup){
+      return {days:g.days, main:"冷凍食品", sides:[], cat:"その他", diff:1, score:null};
+    }
+
     return {days:g.days, main:aiG.main||"", sides, cat:aiG.cat||"", diff:aiG.diff||2, score:null};
   });
 
