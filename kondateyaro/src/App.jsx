@@ -102,16 +102,44 @@ function migrateSettings(s){
   return {...INIT_SETTINGS,...s};
 }
 
+function sanitizeState(st){
+  if(!st) return st;
+  const s={...st};
+  if(!Array.isArray(s.customRecipes)) s.customRecipes=[];
+  if(!Array.isArray(s.dailyGoods)) s.dailyGoods=[];
+  // dailyGoodsは文字列の配列のみ
+  s.dailyGoods=s.dailyGoods.filter(g=>typeof g==="string");
+  if(s.settings){
+    const ss={...s.settings};
+    if(!Array.isArray(ss.ng_foods)) ss.ng_foods=[];
+    ss.ng_foods=ss.ng_foods.filter(f=>typeof f==="string");
+    if(!Array.isArray(ss.frozen_meals)) ss.frozen_meals=[];
+    if(!Array.isArray(ss.sort_cats)||!ss.sort_cats.every(c=>c&&typeof c==="object"&&typeof c.id==="string"))
+      ss.sort_cats=INIT_SETTINGS.sort_cats;
+    if(!Array.isArray(ss.recipe_sites)||!ss.recipe_sites.every(c=>c&&typeof c==="object"&&typeof c.id==="string"))
+      ss.recipe_sites=INIT_SETTINGS.recipe_sites;
+    // day_groupsが配列なら辞書に変換
+    if(Array.isArray(ss.day_groups)){
+      const dict={};
+      if(ss.day_groups.length>0&&typeof ss.day_groups[0]==="object"&&ss.day_groups[0]?.days){
+        ss.day_groups.forEach((g,i)=>{(g.days||[]).forEach(d=>{dict[d]=i+1;});});
+      } else {
+        ss.day_groups.forEach((days,i)=>{if(Array.isArray(days))days.forEach(d=>{dict[d]=i+1;});});
+      }
+      ss.day_groups=Object.keys(dict).length>0?dict:INIT_SETTINGS.day_groups;
+    }
+    s.settings=ss;
+  }
+  return s;
+}
+
 function loadState(){
   try{
     const raw=localStorage.getItem(DB_KEY);
     if(raw){
       const p=JSON.parse(raw);
       const loaded = {...INIT_STATE,...p, settings:migrateSettings(p.settings||{})};
-      // 配列であるべきフィールドの安全化
-      if(!Array.isArray(loaded.customRecipes)) loaded.customRecipes=[];
-      if(!Array.isArray(loaded.dailyGoods)) loaded.dailyGoods=[];
-      return loaded;
+      return sanitizeState(loaded);
     }
   }catch(e){}
   return {...INIT_STATE};
@@ -1506,9 +1534,8 @@ export default function App(){
     (async()=>{ try{
       const remote=await loadFromSheets(sheets_url,sheets_token);
       if(remote){
-        if(!Array.isArray(remote.customRecipes)) remote.customRecipes=[];
-        if(!Array.isArray(remote.dailyGoods)) remote.dailyGoods=[];
-        setSt(prev=>({...prev,...remote,settings:{...prev.settings,...(remote.settings||{})}}));
+        const clean=sanitizeState({...INIT_STATE,...remote,settings:{...INIT_SETTINGS,...(remote.settings||{})}});
+        setSt(prev=>({...prev,...clean}));
       }
     }catch(e){} })();
   },[]);
