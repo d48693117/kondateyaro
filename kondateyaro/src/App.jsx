@@ -200,23 +200,41 @@ NG食材（絶対に使わない）: ${ngFoods}
 
 async function buildShoppingItems(plan,sortMem,settings){
   const servings=settings?.servings||2;
-  const groupInfo=plan.groups.map(g=>{
+  // 空のグループを除外
+  const validGroups=plan.groups.filter(g=>g.main);
+  const groupInfo=validGroups.map((g,gi)=>{
     const dayCount=g.days.length;
     const dishes=[
       {dishType:"main",name:g.main},
-      ...(g.sides||[]).map((s,si)=>({dishType:`side${si+1}`,name:s}))
+      ...(g.sides||[]).filter(s=>s).map((s,si)=>({dishType:`side${si+1}`,name:s}))
     ];
-    return {days:g.days.map(d=>DAY_JP[d]).join("・"),dayCount,servings,dishes};
+    return {groupIdx:gi, days:g.days.map(d=>DAY_JP[d]).join("・"),dayCount,servings,dishes};
   });
   const sys=`買い物リスト作成AI。JSONのみ返すこと。前置き不要。
 各グループ・各料理ごとに食材をリストアップ。日数×人数で合計量を計算。
-塩・砂糖・サラダ油・水・ごま油・片栗粉は除外。
+塩・砂糖・サラダ油・水・ごま油・片栗粉は除外。食材は必要最小限に絞ること。
 出力形式:
-[{"groupIdx":0,"dishType":"main","dishName":"料理名","name":"食材名","qty":"量","type":"ingredient"},...]
+[{"groupIdx":0,"dishType":"main","dishName":"料理名","name":"食材名","qty":"量","type":"ingredient"}]
 typeは"ingredient"か"seasoning"のみ。`;
-  const txt=await callAI(sys,`献立: ${JSON.stringify(groupInfo,null,2)}`,3000);
-  const clean=txt.replace(/```json|```/g,"").trim();
-  const items=JSON.parse(clean);
+  const txt=await callAI(sys,`献立: ${JSON.stringify(groupInfo)}`,4000);
+  // JSON修復: 途中で切れた場合に最後の完全なオブジェクトまでを使う
+  let clean=txt.replace(/```json|```/g,"").trim();
+  let items;
+  try{
+    items=JSON.parse(clean);
+  }catch(e){
+    // 末尾の不完全なオブジェクトを除去して再試行
+    const lastBracket=clean.lastIndexOf("}");
+    if(lastBracket>0){
+      clean=clean.substring(0,lastBracket+1);
+      if(!clean.endsWith("]")) clean+="]";
+      // 先頭にブラケットがなければ追加
+      if(!clean.startsWith("[")) clean="["+clean;
+      items=JSON.parse(clean);
+    } else {
+      throw new Error("買い物リストの生成に失敗しました。もう一度お試しください。");
+    }
+  }
   return items.map((item,i)=>({
     id:`item_${Date.now()}_${i}`,
     groupIdx:item.groupIdx??0, dishType:item.dishType||"main", dishName:item.dishName||"",
