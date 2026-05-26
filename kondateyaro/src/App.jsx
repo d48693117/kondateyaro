@@ -29,7 +29,7 @@ const INIT_SETTINGS = {
     {id:"youtube", label:"YouTube",    url:"https://www.youtube.com/results?search_query={dish}+レシピ"},
     {id:"insta",   label:"Instagram",  url:"https://www.instagram.com/explore/tags/{dish}レシピ"}
   ],
-  day_groups:[["monday","wednesday","friday"],["tuesday","thursday"],["saturday"],["sunday"]]
+  day_groups:{monday:1,tuesday:2,wednesday:1,thursday:2,friday:1,saturday:3,sunday:4}
 };
 
 const INIT_STATE = {
@@ -65,6 +65,12 @@ function migrateSettings(s){
       {id:"L",name:s.cat_L||"3階",color:CAT_COLORS[1],dir:"left"}
     ];
     delete s.cat_R; delete s.cat_L;
+  }
+  // 旧データ互換: day_groups が配列形式 → 辞書形式に変換
+  if(Array.isArray(s.day_groups)){
+    const dict={};
+    s.day_groups.forEach((days,i)=>days.forEach(d=>{dict[d]=i+1;}));
+    s.day_groups=dict;
   }
   return {...INIT_SETTINGS,...s};
 }
@@ -111,12 +117,21 @@ async function loadFromSheets(url,token){
 
 function deriveGroups(dayGroups){
   const dg=dayGroups||INIT_SETTINGS.day_groups;
-  return dg.map((days,i)=>({
-    id:`g${i}`, days,
-    color:GROUP_COLORS[i%GROUP_COLORS.length],
-    light:GROUP_LIGHT[i%GROUP_LIGHT.length],
-    label:days.map(d=>DAY_JP[d]).join("・")
-  }));
+  // 辞書形式 {monday:1,...} → グループ配列に変換
+  const map={};
+  DAYS.forEach(day=>{
+    const gid=(dg[day]||1);
+    if(!map[gid]) map[gid]=[];
+    map[gid].push(day);
+  });
+  return Object.entries(map)
+    .sort((a,b)=>DAYS.indexOf(a[1][0])-DAYS.indexOf(b[1][0]))
+    .map(([gid,days],idx)=>({
+      id:'g'+idx, gid:Number(gid), days,
+      color:GROUP_COLORS[(Number(gid)-1)%GROUP_COLORS.length],
+      light:GROUP_LIGHT[(Number(gid)-1)%GROUP_LIGHT.length],
+      label:days.map(d=>DAY_JP[d]).join('・')
+    }));
 }
 
 function weekStartStr(){
@@ -382,6 +397,35 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
     setSwapSrc(null);
   };
 
+  // 一品ごとのドラッグ＆ドロップ（グループ間・同グループ内どちらも対応）
+  const handleDishSwap=(srcGi,srcSlot,dstGi,dstSlot)=>{
+    if(!plan) return;
+    const getVal=(gi,slot)=>{
+      const g=plan.groups[gi];
+      if(slot==="main") return g.main||"";
+      const idx=Number(slot.replace("side",""));
+      return g.sides?.[idx]||"";
+    };
+    const setVal=(groups,gi,slot,val)=>{
+      const g={...groups[gi]};
+      if(slot==="main"){ g.main=val; }
+      else{
+        const idx=Number(slot.replace("side",""));
+        const sides=[...(g.sides||[])];
+        while(sides.length<=idx) sides.push("");
+        sides[idx]=val;
+        g.sides=sides;
+      }
+      return groups.map((gr,i)=>i===gi?g:gr);
+    };
+    const srcVal=getVal(srcGi,srcSlot);
+    const dstVal=getVal(dstGi,dstSlot);
+    let newGroups=[...plan.groups];
+    newGroups=setVal(newGroups,srcGi,srcSlot,dstVal);
+    newGroups=setVal(newGroups,dstGi,dstSlot,srcVal);
+    save({plan:{...plan,groups:newGroups}});
+  };
+
   const recipeSites=st.settings.recipe_sites||INIT_SETTINGS.recipe_sites;
 
   return(<div>
@@ -411,7 +455,7 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
           const dishInfo=st.dishes?.[group.main];
           return(<GroupCard key={gi} group={group} gi={gi} gInfo={gInfo} dishInfo={dishInfo}
             onPickRecipe={setPickerDish} onChangeMain={handleChangeMain}
-            onDelete={()=>handleDeleteGroup(gi)} onSwap={()=>setSwapSrc(gi)}/>);
+            onDelete={()=>handleDeleteGroup(gi)} onSwap={()=>setSwapSrc(gi)} onDishSwap={handleDishSwap}/>);
         })}
       </div>
     )}
@@ -419,10 +463,11 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
 }
 
 /* 料理カード（変更ポップアップ内にフリーワード＋カテゴリ除外あり） */
-function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,onSwap}){
+function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,onSwap,onDishSwap}){
   const [showSheet,setShowSheet]=useState(false);
   const [changeWanted,setChangeWanted]=useState("");
   const [excludeCat,setExcludeCat]=useState("");
+  const [dragOver,setDragOver]=useState(null); // dragged-over slot key
   const cats=["肉","魚","卵・豆腐","野菜メイン","麺・パスタ","丼","その他"];
 
   const doChange=()=>{ onChangeMain(gi,group.main,changeWanted,excludeCat); setShowSheet(false); setChangeWanted(""); setExcludeCat(""); };
@@ -430,8 +475,70 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
   const avgScore=dishInfo?.scores?.length?avg(dishInfo.scores).toFixed(1):null;
   const diff=dishInfo?.difficulty||group.diff||0;
 
+  // ドラッグ＆ドロップ handlers
+  // slot key: "main" | "side0" | "side1"
+  const handleDragStart=(e,slotKey)=>{
+    e.dataTransfer.setData("text/plain", JSON.stringify({gi, slotKey}));
+    e.dataTransfer.effectAllowed="move";
+  };
+  const handleDragOver=(e,slotKey)=>{
+    e.preventDefault();
+    e.dataTransfer.dropEffect="move";
+    setDragOver(slotKey);
+  };
+  const handleDrop=(e,slotKey)=>{
+    e.preventDefault();
+    setDragOver(null);
+    try{
+      const src=JSON.parse(e.dataTransfer.getData("text/plain"));
+      if(src.gi===gi && src.slotKey===slotKey) return; // same slot
+      onDishSwap(src.gi, src.slotKey, gi, slotKey);
+    }catch(err){}
+  };
+  const handleDragLeave=()=>setDragOver(null);
+
+  // スロット名取得
+  const getSlotName=key=>{
+    if(key==="main") return group.main||"";
+    const idx=Number(key.replace("side",""));
+    return group.sides?.[idx]||"";
+  };
+
+  const SlotRow=({slotKey,label})=>{
+    const name=getSlotName(slotKey);
+    const isOver=dragOver===slotKey;
+    return(
+      <div
+        draggable
+        onDragStart={e=>handleDragStart(e,slotKey)}
+        onDragOver={e=>handleDragOver(e,slotKey)}
+        onDrop={e=>handleDrop(e,slotKey)}
+        onDragLeave={handleDragLeave}
+        style={{
+          display:"flex",alignItems:"center",gap:6,marginBottom:4,
+          padding:"5px 8px",borderRadius:8,cursor:"grab",
+          background:isOver?"#E3F2FD":"transparent",
+          border:isOver?"1.5px dashed #1565C0":"1.5px solid transparent",
+          transition:"background .1s"
+        }}
+      >
+        <span style={{fontSize:11,color:"#BDBDBD",userSelect:"none"}}>⠿</span>
+        {slotKey==="main"?(
+          <div style={{display:"flex",alignItems:"center",gap:6,flex:1,flexWrap:"wrap"}}>
+            <span style={{fontWeight:700,fontSize:16}}>{name||"（空）"}</span>
+            {avgScore&&<span style={{fontSize:11,color:"#FB8C00"}}>⭐{avgScore}</span>}
+            {diff>0&&<span style={{fontSize:11,color:DIFF_COLORS[diff],background:DIFF_COLORS[diff]+"22",padding:"1px 6px",borderRadius:8}}>{DIFF_LABELS[diff]}</span>}
+          </div>
+        ):(
+          <span style={{fontSize:13,color:"#616161",flex:1}}>{label}：{name||"（空）"}</span>
+        )}
+        {name&&<button onClick={()=>onPickRecipe(name)} style={{padding:"2px 7px",background:"#E8F5E9",color:"#2E7D32",border:"1px solid #A5D6A7",borderRadius:6,fontSize:11,fontWeight:600,flexShrink:0}}>🔍</button>}
+      </div>
+    );
+  };
+
   return(<>
-    {showSheet&&<BottomSheet title={`「${group.main}」を変更`} onClose={()=>setShowSheet(false)}>
+    {showSheet&&<BottomSheet title={"「"+group.main+"」を変更"} onClose={()=>setShowSheet(false)}>
       <div style={{marginBottom:10}}>
         <Lbl>使いたい食材（任意）</Lbl>
         <input value={changeWanted} onChange={e=>setChangeWanted(e.target.value)} placeholder="例：鶏もも、キャベツ" autoFocus
@@ -440,7 +547,7 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
       <div style={{marginBottom:14}}>
         <Lbl>除外したいカテゴリ（任意）</Lbl>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {cats.map(cat=>(<button key={cat} onClick={()=>setExcludeCat(excludeCat===cat?"":cat)} style={{padding:"6px 12px",borderRadius:16,border:`1.5px solid ${excludeCat===cat?"#C62828":"#E0E0E0"}`,background:excludeCat===cat?"#FFEBEE":"#F5F5F5",color:excludeCat===cat?"#C62828":"#757575",fontSize:13,fontWeight:500}}>{cat}</button>))}
+          {cats.map(cat=>(<button key={cat} onClick={()=>setExcludeCat(excludeCat===cat?"":cat)} style={{padding:"6px 12px",borderRadius:16,border:"1.5px solid "+(excludeCat===cat?"#C62828":"#E0E0E0"),background:excludeCat===cat?"#FFEBEE":"#F5F5F5",color:excludeCat===cat?"#C62828":"#757575",fontSize:13,fontWeight:500}}>{cat}</button>))}
         </div>
       </div>
       <BtnFull label="別の料理に変更" color={gInfo.color} onClick={doChange}/>
@@ -449,31 +556,21 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
 
     <div className="fade-in" style={{background:"white",borderRadius:12,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
       <div style={{background:gInfo.color,color:"white",padding:"8px 14px",fontWeight:700,fontSize:13}}>{gInfo.label}</div>
-      <div style={{padding:"11px 14px"}}>
-        {/* 主菜 */}
-        {group.main?(
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
-                <div style={{fontWeight:700,fontSize:17}}>{group.main}</div>
-                {avgScore&&<span style={{fontSize:11,color:"#FB8C00"}}>⭐{avgScore}</span>}
-                {diff>0&&<span style={{fontSize:11,color:DIFF_COLORS[diff],background:DIFF_COLORS[diff]+"22",padding:"1px 6px",borderRadius:8}}>{DIFF_LABELS[diff]}</span>}
-                <button onClick={()=>onPickRecipe(group.main)} style={{padding:"2px 8px",background:"#E8F5E9",color:"#2E7D32",border:"1px solid #A5D6A7",borderRadius:6,fontSize:11,fontWeight:600}}>🔍 レシピ</button>
-              </div>
-              {(group.sides||[]).map((side,si)=>(<div key={si} style={{display:"flex",alignItems:"center",gap:4,marginBottom:2}}>
-                <span style={{fontSize:12,color:"#757575"}}>副菜{si+1}：{side}</span>
-                <button onClick={()=>onPickRecipe(side)} style={{padding:"1px 6px",background:"#F5F5F5",color:"#9E9E9E",border:"1px solid #E0E0E0",borderRadius:4,fontSize:10}}>🔍</button>
-              </div>))}
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:10,flexShrink:0}}>
-              <button onClick={()=>setShowSheet(true)} style={{padding:"5px 10px",background:gInfo.light,color:gInfo.color,border:`1.5px solid ${gInfo.color}`,borderRadius:7,fontSize:12,fontWeight:700}}>変更</button>
-              <button onClick={onSwap} style={{padding:"5px 10px",background:"#F5F5F5",color:"#616161",border:"1.5px solid #E0E0E0",borderRadius:7,fontSize:12,fontWeight:600}}>↕入替</button>
-              <button onClick={onDelete} style={{padding:"5px 10px",background:"#FFEBEE",color:"#C62828",border:"1.5px solid #EF9A9A",borderRadius:7,fontSize:11,fontWeight:600}}>削除</button>
-            </div>
+      <div style={{padding:"10px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <SlotRow slotKey="main" label="主菜"/>
+            {(group.sides||[]).map((_,si)=>(
+              <SlotRow key={si} slotKey={"side"+si} label={"副菜"+(si+1)}/>
+            ))}
+            <div style={{fontSize:10,color:"#BDBDBD",marginTop:2}}>⠿ ドラッグで並び替え・別グループとも入替可</div>
           </div>
-        ):(
-          <div style={{color:"#BDBDBD",fontSize:13,textAlign:"center",padding:"8px 0"}}>（削除済み）</div>
-        )}
+          <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:10,flexShrink:0}}>
+            <button onClick={()=>setShowSheet(true)} style={{padding:"5px 10px",background:gInfo.light,color:gInfo.color,border:"1.5px solid "+gInfo.color,borderRadius:7,fontSize:12,fontWeight:700}}>変更</button>
+            <button onClick={onSwap} style={{padding:"5px 10px",background:"#F5F5F5",color:"#616161",border:"1.5px solid #E0E0E0",borderRadius:7,fontSize:12,fontWeight:600}}>↕入替</button>
+            <button onClick={onDelete} style={{padding:"5px 10px",background:"#FFEBEE",color:"#C62828",border:"1.5px solid #EF9A9A",borderRadius:7,fontSize:11,fontWeight:600}}>削除</button>
+          </div>
+        </div>
       </div>
     </div>
   </>);
@@ -783,53 +880,48 @@ function Step4({sess,plan,sortCats,save,notify,groups}){
    DAY GROUP EDITOR（バグ修正済み）
 ══════════════════════════════════════════ */
 function DayGroupEditor({dayGroups,onChange}){
-  // 各曜日→グループIDX のマップを安定管理
-  const getGroupIdx=day=>{ for(let i=0;i<dayGroups.length;i++){if(dayGroups[i].includes(day))return i;} return 0; };
+  // dayGroups は辞書形式 {monday:1, tuesday:2, ...}
+  const getGid=day=>dayGroups[day]||1;
 
   const cycleDayGroup=day=>{
-    // 現在のマップを構築
-    const curMap={};
-    DAYS.forEach(d=>{ curMap[d]=getGroupIdx(d); });
-    const curIdx=curMap[day];
-    const numGroups=dayGroups.length;
-    const canAdd=numGroups<GROUP_COLORS.length;
-    const nextIdx=canAdd?(curIdx+1)%(numGroups+1):(curIdx+1)%numGroups;
-
-    // 新マップ
-    const newMap={...curMap,[day]:nextIdx};
-
-    // DAYS順で初出現グループを0,1,2...に正規化
-    const seenGroups=[];
-    const normalMap={};
-    DAYS.forEach(d=>{
-      const gi=newMap[d];
-      if(!seenGroups.includes(gi)) seenGroups.push(gi);
-      normalMap[d]=seenGroups.indexOf(gi);
-    });
-
-    // 再構築
-    const maxNorm=Math.max(...Object.values(normalMap));
-    const newGroups=Array.from({length:maxNorm+1},()=>[]);
-    DAYS.forEach(d=>newGroups[normalMap[d]].push(d));
-    onChange(newGroups);
+    const curGid=getGid(day);
+    // 現在存在するグループIDの一覧
+    const existingGids=[...new Set(DAYS.map(d=>dayGroups[d]||1))].sort((a,b)=>a-b);
+    const maxGid=existingGids[existingGids.length-1];
+    // 次のグループ: 現在のGID+1。最大+1（新グループ）まで可。7を超えたら1に戻る
+    const canAdd=existingGids.length < GROUP_COLORS.length;
+    let nextGid=curGid+1;
+    if(nextGid > maxGid+1) nextGid=1;
+    if(!canAdd && nextGid > maxGid) nextGid=1;
+    onChange({...dayGroups,[day]:nextGid});
   };
+
+  // サマリー生成（辞書→グループ別集計）
+  const groupMap={};
+  DAYS.forEach(day=>{
+    const gid=getGid(day);
+    if(!groupMap[gid]) groupMap[gid]=[];
+    groupMap[gid].push(day);
+  });
+  const summaryGroups=Object.entries(groupMap).sort((a,b)=>a[0]-b[0]);
 
   return(<div>
     <div style={{display:"flex",gap:6,marginBottom:10}}>
       {DAYS.map(day=>{
-        const gi=getGroupIdx(day);
-        const color=GROUP_COLORS[gi%GROUP_COLORS.length];
-        const light=GROUP_LIGHT[gi%GROUP_LIGHT.length];
-        return(<button key={day} onClick={()=>cycleDayGroup(day)} style={{flex:1,padding:"10px 2px",border:`2px solid ${color}`,borderRadius:8,background:light,color,fontWeight:700,fontSize:14,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+        const gid=getGid(day);
+        const ci=(gid-1)%GROUP_COLORS.length;
+        const color=GROUP_COLORS[ci];
+        const light=GROUP_LIGHT[ci];
+        return(<button key={day} onClick={()=>cycleDayGroup(day)} style={{flex:1,padding:"10px 2px",border:"2px solid "+color,borderRadius:8,background:light,color,fontWeight:700,fontSize:14,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
           <span>{DAY_JP[day]}</span>
-          <span style={{fontSize:9,opacity:0.8}}>G{gi+1}</span>
+          <span style={{fontSize:9,opacity:0.8}}>G{gid}</span>
         </button>);
       })}
     </div>
     <div style={{fontSize:12,color:"#9E9E9E"}}>
-      {dayGroups.map((days,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:4,marginBottom:3}}>
-        <div style={{width:10,height:10,borderRadius:2,background:GROUP_COLORS[i%GROUP_COLORS.length],flexShrink:0}}/>
-        <span>G{i+1}：{days.map(d=>DAY_JP[d]).join("・")}（{days.length}日間・同一献立）</span>
+      {summaryGroups.map(([gid,days])=>(<div key={gid} style={{display:"flex",alignItems:"center",gap:4,marginBottom:3}}>
+        <div style={{width:10,height:10,borderRadius:2,background:GROUP_COLORS[(Number(gid)-1)%GROUP_COLORS.length],flexShrink:0}}/>
+        <span>G{gid}：{days.map(d=>DAY_JP[d]).join("・")}（{days.length}日間・同一献立）</span>
       </div>))}
     </div>
   </div>);
