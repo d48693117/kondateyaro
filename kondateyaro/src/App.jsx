@@ -34,7 +34,7 @@ const INIT_SETTINGS = {
 
 const INIT_STATE = {
   plan:null, session:null, sortMem:{}, dailyGoods:[],
-  dishes:{}, customRecipes:{}, ingredientMem:{},
+  dishes:{}, customRecipes:[], ingredientMem:{},
   settings:INIT_SETTINGS
 };
 
@@ -65,6 +65,10 @@ function migrateSettings(s){
       {id:"L",name:s.cat_L||"3階",color:CAT_COLORS[1],dir:"left"}
     ];
     delete s.cat_R; delete s.cat_L;
+  }
+  // customRecipesがオブジェクトの場合配列に変換
+  if(s.customRecipes && !Array.isArray(s.customRecipes)){
+    s.customRecipes=[];
   }
   // 旧データ互換: day_groups が配列形式 → 辞書形式に変換
   if(Array.isArray(s.day_groups)){
@@ -1321,11 +1325,6 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
           <Btn label="今すぐ読み込み" color="#1B5E20" onClick={loadNow}/>
         </div>
         {sheetsMsg&&<div style={{marginTop:8,fontSize:12,color:sheetsMsg.includes("✅")?"#2E7D32":"#C62828"}}>{sheetsMsg}</div>}
-      </Card>
-
-      {/* LINE */}
-      <Card title="📲 LINE Notify設定">
-        <Field label="LINEトークン" value={s.line_token} onChange={v=>upd({line_token:v})} placeholder="LINE Notifyのアクセストークン"/>
       </Card>
 
       {/* 曜日グループ */}
