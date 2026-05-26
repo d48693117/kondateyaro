@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Component } from "react";
 
 /* ══════════════════════════════════════════
    CONSTANTS
@@ -37,6 +37,29 @@ const INIT_STATE = {
   dishes:{}, customRecipes:[], ingredientMem:{},
   settings:INIT_SETTINGS
 };
+
+/* ══════════════════════════════════════════
+   ERROR BOUNDARY
+══════════════════════════════════════════ */
+class ErrorBoundary extends Component {
+  constructor(props){ super(props); this.state={error:null}; }
+  static getDerivedStateFromError(e){ return {error:e}; }
+  render(){
+    if(this.state.error){
+      return(<div style={{padding:24,textAlign:"center"}}>
+        <div style={{fontSize:36,marginBottom:12}}>⚠️</div>
+        <div style={{fontWeight:700,fontSize:15,marginBottom:8}}>表示エラー</div>
+        <div style={{fontSize:12,color:"#C62828",background:"#FFEBEE",borderRadius:8,padding:"10px 12px",textAlign:"left",wordBreak:"break-all"}}>
+          {this.state.error.message}
+        </div>
+        <button onClick={()=>this.setState({error:null})} style={{marginTop:14,padding:"10px 20px",background:"#2E7D32",color:"white",border:"none",borderRadius:8,fontSize:14,fontWeight:700}}>
+          再試行
+        </button>
+      </div>);
+    }
+    return this.props.children;
+  }
+}
 
 /* ══════════════════════════════════════════
    CSS
@@ -417,6 +440,13 @@ function Card({title,children}){
   return(<div style={{background:"white",borderRadius:12,padding:14,marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
     <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>{title}</div>
     {children}
+  </div>);
+}
+function SettingsField({label,value,onChange,placeholder}){
+  return(<div style={{marginBottom:12}}>
+    <Lbl>{label}</Lbl>
+    <input value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+      style={{width:"100%",padding:"11px 12px",borderRadius:8,border:"2px solid #E0E0E0",fontSize:14}}/>
   </div>);
 }
 function Btn({label,color,onClick}){
@@ -1309,11 +1339,7 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
     save({dailyGoods:[...(st.dailyGoods||[]),name]});
     setNewGood("");
   };
-  const Field=({label,value,onChange,placeholder})=>(<div style={{marginBottom:12}}>
-    <Lbl>{label}</Lbl>
-    <input value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
-      style={{width:"100%",padding:"11px 12px",borderRadius:8,border:"2px solid #E0E0E0",fontSize:14}}/>
-  </div>);
+  // Fieldは外部定義（SettingsField）を使用
 
   return(<div>
     <Hdr bg="#37474F" title="⚙️ 設定"/>
@@ -1322,8 +1348,8 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
       {/* Sheets */}
       <Card title="📊 Googleスプレッドシート連携">
         <p style={{fontSize:12,color:"#9E9E9E",marginBottom:10,lineHeight:1.6}}>複数端末でデータを共有できます。GASのURLを設定してください。</p>
-        <Field label="GAS Web App URL" value={s.sheets_url} onChange={v=>upd({sheets_url:v})} placeholder="https://script.google.com/..."/>
-        <Field label="認証トークン（任意）" value={s.sheets_token} onChange={v=>upd({sheets_token:v})} placeholder="自分で決めたパスワード文字列"/>
+        <SettingsField label="GAS Web App URL" value={s.sheets_url} onChange={v=>upd({sheets_url:v})} placeholder="https://script.google.com/..."/>
+        <SettingsField label="認証トークン（任意）" value={s.sheets_token} onChange={v=>upd({sheets_token:v})} placeholder="自分で決めたパスワード文字列"/>
         <div style={{display:"flex",gap:8}}>
           <Btn label="接続テスト" color="#37474F" onClick={testSheets}/>
           <Btn label="今すぐ読み込み" color="#1B5E20" onClick={loadNow}/>
@@ -1523,7 +1549,7 @@ export default function App(){
     {tab===0&&<MenuScreen st={st} save={save} setBusy={setBusy} setBMsg={setBMsg} notify={notify}/>}
     {tab===1&&<RatingScreen st={st} save={save} notify={notify}/>}
     {tab===2&&<ShopScreen st={st} save={save} notify={notify} setFloor={setFloor}/>}
-    {tab===3&&<SettingsScreen st={st} save={save} setBusy={setBusy} setBMsg={setBMsg} notify={notify}/>}
+    {tab===3&&<ErrorBoundary><SettingsScreen st={st} save={save} setBusy={setBusy} setBMsg={setBMsg} notify={notify}/></ErrorBoundary>}
     <BottomNav tab={tab} setTab={setTab}/>
   </div>);
 }
