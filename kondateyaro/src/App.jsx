@@ -257,12 +257,16 @@ NG食材（絶対に使わない）: ${ngFoods}
   const groupData=JSON.parse(clean);
   const mealCfg=st.settings?.meal_config||INIT_SETTINGS.meal_config;
   const SOUP_PATTERN=/汁$|スープ$|お吸い物|汁物/;
-  const filtered=groupData.map(g=>{
-    if(mealCfg.dinner?.soup) return g; // 汁物ありならフィルターしない
-    const sides=(g.sides||[]).filter(s=>!SOUP_PATTERN.test(s));
-    return {...g, sides};
+
+  // AIが返したグループ数と設定のグループ数を合わせる
+  // daysは設定側（groups）のものを使い、AIの料理名だけ採用する
+  const merged=groups.map((g,i)=>{
+    const aiG=groupData[i]||groupData[0]||{};
+    const sides=(aiG.sides||[]).filter(s=>mealCfg.dinner?.soup?true:!SOUP_PATTERN.test(s));
+    return {days:g.days, main:aiG.main||"", sides, cat:aiG.cat||"", diff:aiG.diff||2, score:null};
   });
-  return {weekStart:weekStartStr(), groups:filtered.map(g=>({...g,score:null}))};
+
+  return {weekStart:weekStartStr(), groups:merged};
 }
 
 async function buildShoppingItems(plan,sortMem,settings,dishes,ingredientMem){
