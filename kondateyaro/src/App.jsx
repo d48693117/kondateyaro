@@ -84,7 +84,11 @@ function loadState(){
     const raw=localStorage.getItem(DB_KEY);
     if(raw){
       const p=JSON.parse(raw);
-      return {...INIT_STATE,...p, settings:migrateSettings(p.settings||{})};
+      const loaded = {...INIT_STATE,...p, settings:migrateSettings(p.settings||{})};
+      // 配列であるべきフィールドの安全化
+      if(!Array.isArray(loaded.customRecipes)) loaded.customRecipes=[];
+      if(!Array.isArray(loaded.dailyGoods)) loaded.dailyGoods=[];
+      return loaded;
     }
   }catch(e){}
   return {...INIT_STATE};
@@ -1301,8 +1305,8 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
   };
   const addGood=()=>{
     const name=newGood.trim();
-    if(!name||st.dailyGoods.includes(name))return;
-    save({dailyGoods:[...st.dailyGoods,name]});
+    if(!name||(st.dailyGoods||[]).includes(name))return;
+    save({dailyGoods:[...(st.dailyGoods||[]),name]});
     setNewGood("");
   };
   const Field=({label,value,onChange,placeholder})=>(<div style={{marginBottom:12}}>
@@ -1384,7 +1388,7 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
 
       {/* 手動レシピ登録 */}
       <Card title="📖 手動レシピ登録">
-        <CustomRecipesEditor customRecipes={st.customRecipes} onChange={v=>save({customRecipes:v})} notify={notify}/>
+        <CustomRecipesEditor customRecipes={st.customRecipes||[]} onChange={v=>save({customRecipes:v})} notify={notify}/>
       </Card>
 
       {/* 日用品 */}
@@ -1395,9 +1399,9 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
           <button onClick={addGood} style={{padding:"9px 14px",background:"#E65100",color:"white",border:"none",borderRadius:8,fontSize:14,fontWeight:700}}>追加</button>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {st.dailyGoods.map((name,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 10px",background:"#FBE9E7",borderRadius:16,border:"1px solid #FFCCBC"}}>
+          {(st.dailyGoods||[]).map((name,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:4,padding:"6px 10px",background:"#FBE9E7",borderRadius:16,border:"1px solid #FFCCBC"}}>
             <span style={{fontSize:13}}>{name}</span>
-            <button onClick={()=>save({dailyGoods:st.dailyGoods.filter(g=>g!==name)})} style={{background:"none",border:"none",color:"#BF360C",fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+            <button onClick={()=>save({dailyGoods:(st.dailyGoods||[]).filter(g=>g!==name)})} style={{background:"none",border:"none",color:"#BF360C",fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
           </div>))}
         </div>
       </Card>
