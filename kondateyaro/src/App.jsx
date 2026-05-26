@@ -252,18 +252,24 @@ NG食材: ${ngFoods}
 高評価（優先）: ${scoreInfo}
 登録レシピ（優先）: ${customList}${wantedLine}
 
-ルール:
-・各グループに必ず1つmainを設定する（絶対に省略・スキップしない）
-・mainは必ずタンパク質メインの料理（肉・魚・卵・豆腐料理など）。サラダ・和え物・漬物・酢の物はmainに設定しない
+ルール（昼食）:
+・lunchのmainは必ず一品完結の料理（焼きそば・丼もの・パスタ・チャーハン・そば・うどん・お茶漬け等）
+・lunchにsidesは不要
+・同日の昼夜で同じ食材をメインに使わない（例：昼に鮭なら夜は鮭以外）
+
+ルール（夕食）:
+・dinnerのmainは必ず肉か魚料理のみ（サラダ・和え物・漬物不可）
 ・夜はmain1品+sides2品（副菜は家庭的なもの：ひじき煮・ポテサラ・冷奴・卵焼き等）
 ・${mealCfg.dinner?.soup?"汁物あり":"副菜に汁物（味噌汁・豚汁・スープ等）を含めない"}
-・土日グループはmainを必ず丼もの（親子丼・牛丼・カツ丼・天丼・海鮮丼等）にする
+・土日グループのdinnerは必ず丼もの（親子丼・牛丼・カツ丼・天丼・海鮮丼等）
+
+共通:
 ・同じ料理を複数グループで使わない
 ・catは「肉/魚/卵・豆腐/野菜メイン/麺・パスタ/丼/その他」
 ・diffは1=かんたん/2=ふつう/3=本格
 
 出力形式（必ず${groups.length}要素の配列）:
-[{"main":"料理名","sides":["副菜1","副菜2"],"cat":"肉","diff":2},...]
+[{"lunch":{"main":"焼きそば","cat":"麺・パスタ","diff":1},"dinner":{"main":"生姜焼き","sides":["ひじきの煮物","冷奴"],"cat":"肉","diff":2}},...]
 ※daysフィールドは不要。配列の順番がG1,G2,...に対応する。`;
 
   // 最大2回試行
@@ -278,22 +284,33 @@ NG食材: ${ngFoods}
     throw new Error("献立の生成に失敗しました。もう一度「これでも食らえ」を押してください。");
   }
 
-  // daysは設定側のものを使い、AIの料理名だけ採用する
+  // daysは設定側のものを使い、AIの昼夜それぞれの料理名を採用する
   const merged=groups.map((g,i)=>{
     const aiG=groupData[i]||{};
-    const sides=(aiG.sides||[]).filter(s=>!SOUP_PATTERN.test(s)||mealCfg.dinner?.soup);
+    const aiLunch=aiG.lunch||{};
+    const aiDinner=aiG.dinner||{};
+    const dinnerSides=(aiDinner.sides||[]).filter(s=>!SOUP_PATTERN.test(s)||mealCfg.dinner?.soup);
 
-    // 冷凍食品強制適用: グループの代表曜日が frozen_meals に含まれる場合
-    const repDay=g.days[0];
-    const isFrozenGroup=frozen_meals.some(k=>{
+    // 冷凍食品強制適用（設定に基づく）
+    const isFrozenDinner=frozen_meals.some(k=>{
       const[d,meal]=k.split("_");
-      return g.days.includes(d) && meal==="dinner";
+      return g.days.includes(d)&&meal==="dinner";
     });
-    if(isFrozenGroup){
-      return {days:g.days, main:"冷凍食品", sides:[], cat:"その他", diff:1, score:null};
-    }
+    const isFrozenLunch=frozen_meals.some(k=>{
+      const[d,meal]=k.split("_");
+      return g.days.includes(d)&&meal==="lunch";
+    });
 
-    return {days:g.days, main:aiG.main||"", sides, cat:aiG.cat||"", diff:aiG.diff||2, score:null};
+    const lunch={
+      main:isFrozenLunch?"冷凍食品":(aiLunch.main||""),
+      cat:isFrozenLunch?"その他":(aiLunch.cat||""),
+      diff:isFrozenLunch?1:(aiLunch.diff||1)
+    };
+    const dinner=isFrozenDinner
+      ?{main:"冷凍食品",sides:[],cat:"その他",diff:1}
+      :{main:aiDinner.main||"",sides:dinnerSides,cat:aiDinner.cat||"",diff:aiDinner.diff||2};
+
+    return {days:g.days, lunch, dinner, score:null};
   });
 
   return {weekStart:weekStartStr(), groups:merged};
@@ -301,12 +318,17 @@ NG食材: ${ngFoods}
 
 async function buildShoppingItems(plan,sortMem,settings,dishes,ingredientMem){
   const servings=settings?.servings||2;
-  const validGroups=plan.groups.filter(g=>g.main);
+  // lunch/dinner両方の有効グループ
+  const validGroups=plan.groups.filter(g=>g.dinner?.main||g.main);
 
-  // レシピURLが登録されている料理を特定
+  // レシピURLが登録されている料理を特定（lunch/dinner両方）
   const urlDishes={};
   validGroups.forEach((g,gi)=>{
-    const allDishes=[{key:"main",name:g.main},...(g.sides||[]).filter(s=>s).map((s,si)=>({key:`side${si+1}`,name:s}))];
+    const allDishes=[
+      {key:"lunch_main",name:g.lunch?.main||""},
+      {key:"dinner_main",name:g.dinner?.main||g.main||""},
+      ...(g.dinner?.sides||g.sides||[]).filter(s=>s).map((s,si)=>({key:`dinner_side${si+1}`,name:s}))
+    ].filter(d=>d.name&&d.name!=="冷凍食品");
     allDishes.forEach(d=>{
       const url=(dishes||{})[d.name]?.recipeUrl;
       if(url) urlDishes[`${gi}_${d.key}`]={name:d.name,url};
@@ -332,9 +354,13 @@ async function buildShoppingItems(plan,sortMem,settings,dishes,ingredientMem){
   const groupInfo=validGroups.map((g,gi)=>{
     const dayCount=g.days.length;
     const total=servings*dayCount;
+    const lunchMain=g.lunch?.main||"";
+    const dinnerMain=g.dinner?.main||g.main||"";
+    const dinnerSides=g.dinner?.sides||g.sides||[];
     const dishes2=[
-      {dishType:"main",name:g.main},
-      ...(g.sides||[]).filter(s=>s).map((s,si)=>({dishType:`side${si+1}`,name:s}))
+      ...(lunchMain&&lunchMain!=="冷凍食品"?[{dishType:"lunch_main",name:lunchMain}]:[]),
+      ...(dinnerMain&&dinnerMain!=="冷凍食品"?[{dishType:"dinner_main",name:dinnerMain}]:[]),
+      ...dinnerSides.filter(s=>s).map((s,si)=>({dishType:`dinner_side${si+1}`,name:s}))
     ];
     return {groupIdx:gi, days:g.days.map(d=>DAY_JP[d]).join("・"),dayCount,servings,total,dishes:dishes2};
   });
@@ -418,21 +444,36 @@ function buildLINEMessage(plan,session,sortCats,dishes){
     msg+="\n📅 今週の献立\n";
     plan.groups.forEach((g,gi)=>{
       const label=g.days.map(d=>DAY_JP[d]).join("・");
-      msg+=`\n【${label}】\n🍽 主菜: ${g.main}\n`;
-      // 登録済みレシピURL
-      const mainUrl=(dishes||{})[g.main]?.recipeUrl;
-      if(mainUrl) msg+=`  🔗 ${mainUrl}\n`;
-      if(session?.items){
-        const mainIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded&&i.type==="ingredient");
-        if(mainIng.length) msg+=`  食材: ${mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
+      msg+=`\n【${label}】\n`;
+      // 昼食
+      const lunchMain=g.lunch?.main||"";
+      if(lunchMain){
+        msg+=`☀️ 昼: ${lunchMain}\n`;
+        const lunchUrl=(dishes||{})[lunchMain]?.recipeUrl;
+        if(lunchUrl) msg+=`  🔗 ${lunchUrl}\n`;
+        if(session?.items){
+          const lunchIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="lunch_main"&&!i.excluded&&i.type==="ingredient");
+          if(lunchIng.length) msg+=`  食材: ${lunchIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
+        }
       }
-      (g.sides||[]).forEach((side,si)=>{
-        const sideIng=(session?.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
-        msg+=`🥗 副菜: ${side}\n`;
-        const sideUrl=(dishes||{})[side]?.recipeUrl;
-        if(sideUrl) msg+=`  🔗 ${sideUrl}\n`;
-        if(sideIng.length) msg+=`  食材: ${sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
-      });
+      // 夕食
+      const dinnerMain=g.dinner?.main||g.main||"";
+      if(dinnerMain){
+        msg+=`🌙 夜: ${dinnerMain}\n`;
+        const mainUrl=(dishes||{})[dinnerMain]?.recipeUrl;
+        if(mainUrl) msg+=`  🔗 ${mainUrl}\n`;
+        if(session?.items){
+          const mainIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="dinner_main"&&!i.excluded&&i.type==="ingredient");
+          if(mainIng.length) msg+=`  食材: ${mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
+        }
+        (g.dinner?.sides||g.sides||[]).forEach((side,si)=>{
+          const sideIng=(session?.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`dinner_side${si+1}`&&!i.excluded&&i.type==="ingredient");
+          msg+=`🥗 副菜: ${side}\n`;
+          const sideUrl=(dishes||{})[side]?.recipeUrl;
+          if(sideUrl) msg+=`  🔗 ${sideUrl}\n`;
+          if(sideIng.length) msg+=`  食材: ${sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
+        });
+      }
     });
   }
   if(session){
@@ -575,24 +616,26 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
   const handleChangeMain=async(gi,slotKey,oldDish,wantedForChange="",excludeCat="")=>{
     setBusy(true);setBMsg("別の料理を提案中...");
     try{
-      const isMain=slotKey==="main";
       const ngFoods=(st.settings.ng_foods||[]).join("、")||"なし";
       const wLine=wantedForChange.trim()?`\n使いたい食材: ${wantedForChange.trim()}`:"";
       const exLine=excludeCat?`\nカテゴリ「${excludeCat}」は除外`:"";
-      const allDishes=plan.groups.flatMap(g=>[g.main,...(g.sides||[])]).filter(Boolean).join("、");
-      const roleNote=isMain
-        ?"主菜（タンパク質メインの料理。肉・魚・卵・豆腐料理。サラダ・和え物・漬物は不可）"
+      const allDishes=plan.groups.flatMap(g=>[g.lunch?.main,g.dinner?.main,...(g.dinner?.sides||[])]).filter(Boolean).join("、");
+      const roleNote=slotKey==="lunch_main"
+        ?"昼食（一品完結の料理。焼きそば・丼・パスタ・チャーハン等）"
+        :slotKey==="dinner_main"
+        ?"夕食の主菜（肉か魚料理のみ。サラダ・和え物不可）"
         :"副菜（家庭的なおかず。ひじき煮・ポテサラ・冷奴・卵焼き等）";
       const sys=`料理名を1つだけ返してください。余計なテキスト不要。役割: ${roleNote}。NG食材: ${ngFoods}${wLine}${exLine}`;
       const txt=await callAI(sys,`今週の献立は「${allDishes}」です。「${oldDish}」の代わりを1つ提案してください。`);
       const newDish=txt.trim().replace(/[「」]/g,"");
       const newGroups=plan.groups.map((g,i)=>{
         if(i!==gi) return g;
-        if(slotKey==="main") return {...g,main:newDish};
-        const sideIdx=Number(slotKey.replace("side",""));
-        const sides=[...(g.sides||[])];
+        if(slotKey==="lunch_main") return {...g,lunch:{...g.lunch,main:newDish}};
+        if(slotKey==="dinner_main") return {...g,dinner:{...g.dinner,main:newDish}};
+        const sideIdx=Number(slotKey.replace("dinner_side",""));
+        const sides=[...(g.dinner?.sides||g.sides||[])];
         sides[sideIdx]=newDish;
-        return {...g,sides};
+        return {...g,dinner:{...g.dinner,sides}};
       });
       save({plan:{...plan,groups:newGroups}});
     }catch(e){alert("エラー: "+e.message);}
@@ -618,19 +661,26 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
     if(!plan) return;
     const getVal=(gi,slot)=>{
       const g=plan.groups[gi];
-      if(slot==="main") return g.main||"";
-      const idx=Number(slot.replace("side",""));
-      return g.sides?.[idx]||"";
+      if(slot==="lunch_main") return g.lunch?.main||"";
+      if(slot==="dinner_main") return g.dinner?.main||g.main||"";
+      if(slot.startsWith("dinner_side")){
+        const idx=Number(slot.replace("dinner_side",""));
+        return (g.dinner?.sides||g.sides||[])[idx]||"";
+      }
+      return "";
     };
     const setVal=(groups,gi,slot,val)=>{
       const g={...groups[gi]};
-      if(slot==="main"){ g.main=val; }
-      else{
-        const idx=Number(slot.replace("side",""));
-        const sides=[...(g.sides||[])];
+      if(slot==="lunch_main"){
+        g.lunch={...g.lunch,main:val};
+      } else if(slot==="dinner_main"){
+        g.dinner={...g.dinner,main:val};
+      } else if(slot.startsWith("dinner_side")){
+        const idx=Number(slot.replace("dinner_side",""));
+        const sides=[...(g.dinner?.sides||g.sides||[])];
         while(sides.length<=idx) sides.push("");
         sides[idx]=val;
-        g.sides=sides;
+        g.dinner={...g.dinner,sides};
       }
       return groups.map((gr,i)=>i===gi?g:gr);
     };
@@ -714,9 +764,16 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
   };
 
   const getSlotName=key=>{
-    if(key==="main") return group.main||"";
+    if(key==="lunch_main") return group.lunch?.main||"";
+    if(key==="dinner_main") return group.dinner?.main||group.main||"";
+    if(key.startsWith("dinner_side")){
+      const idx=Number(key.replace("dinner_side",""));
+      return (group.dinner?.sides||group.sides||[])[idx]||"";
+    }
+    // 後方互換
+    if(key==="main") return group.dinner?.main||group.main||"";
     const idx=Number(key.replace("side",""));
-    return group.sides?.[idx]||"";
+    return (group.dinner?.sides||group.sides||[])[idx]||"";
   };
 
   const doChange=()=>{
@@ -832,8 +889,13 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
         <button onClick={onSwap} style={{padding:"4px 10px",background:"rgba(255,255,255,.2)",color:"white",border:"1px solid rgba(255,255,255,.4)",borderRadius:6,fontSize:12,fontWeight:600}}>↕ 入替</button>
       </div>
       <div style={{padding:"10px 14px"}}>
-        <SlotRow slotKey="main" label="主菜"/>
-        {(group.sides||[]).map((_,si)=>(<SlotRow key={si} slotKey={"side"+si} label={"副菜"+(si+1)}/>))}
+        {/* 昼食 */}
+        {(group.lunch?.main||"")&&<div style={{fontSize:11,color:"#9E9E9E",fontWeight:600,marginBottom:2,marginTop:4}}>☀️ 昼食</div>}
+        {(group.lunch?.main||"")&&<SlotRow slotKey="lunch_main" label="昼食"/>}
+        {/* 夕食 */}
+        <div style={{fontSize:11,color:"#9E9E9E",fontWeight:600,marginBottom:2,marginTop:6}}>🌙 夕食</div>
+        <SlotRow slotKey="dinner_main" label="主菜"/>
+        {(group.dinner?.sides||group.sides||[]).map((_,si)=>(<SlotRow key={si} slotKey={"dinner_side"+si} label={"副菜"+(si+1)}/>))}
         <div style={{fontSize:10,color:"#BDBDBD",marginTop:2}}>⠿ ドラッグで並び替え　🔍 タップで操作</div>
       </div>
     </div>
@@ -847,7 +909,9 @@ function RatingScreen({st,save,notify}){
   const plan=st.plan;
   if(!plan||!plan.groups?.length) return(<div><Hdr bg="#F57F17" title="⭐ 評価"/><Empty icon="⭐" msg={"献立タブで献立を生成してから\n評価してください"}/></div>);
 
-  const allDishes=[...plan.groups.flatMap(g=>[g.main,...(g.sides||[])])].filter(Boolean);
+      const allDishes=[...plan.groups.flatMap(g=>[
+        g.lunch?.main,g.dinner?.main||g.main,...(g.dinner?.sides||g.sides||[])
+      ])].filter(Boolean);
 
   const rateDish=(name,score)=>{
     const prev=st.dishes?.[name]||{scores:[],difficulty:0,lastServed:null};
@@ -869,7 +933,11 @@ function RatingScreen({st,save,notify}){
         return(<div key={gi} style={{background:"white",borderRadius:12,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.07)"}}>
           <div style={{background:gInfo.color,color:"white",padding:"7px 14px",fontSize:13,fontWeight:700}}>{gInfo.label}</div>
           <div style={{padding:"10px 14px"}}>
-            {[{name:g.main,label:"主菜"},...(g.sides||[]).map((s,i)=>({name:s,label:`副菜${i+1}`}))].filter(d=>d.name).map(({name,label})=>{
+            {[
+              ...(g.lunch?.main?[{name:g.lunch.main,label:"昼食"}]:[]),
+              {name:g.dinner?.main||g.main||"",label:"主菜"},
+              ...(g.dinner?.sides||g.sides||[]).map((s,i)=>({name:s,label:`副菜${i+1}`}))
+            ].filter(d=>d.name).map(({name,label})=>{
               const info=st.dishes?.[name]||{};
               const avgS=info.scores?.length?avg(info.scores).toFixed(1):null;
               const diff=info.difficulty||0;
@@ -1164,16 +1232,26 @@ function Step4({sess,plan,sortCats,save,notify,groups,dishes}){
       <div style={{background:"white",borderRadius:12,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         {plan.groups.map((g,gi)=>{
           const gInfo=groups[gi]||groups[0];
-          const mainIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded&&i.type==="ingredient");
+          const lunchMain=g.lunch?.main||"";
+          const dinnerMain=g.dinner?.main||g.main||"";
+          const lunchIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType==="lunch_main"&&!i.excluded&&i.type==="ingredient");
+          const mainIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType==="dinner_main"&&!i.excluded&&i.type==="ingredient");
           return(<div key={gi} style={{padding:"11px 14px",borderBottom:gi<plan.groups.length-1?"1px solid #F5F5F5":"none"}}>
-            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:3}}>
-              <span style={{fontSize:11,fontWeight:700,color:gInfo.color,minWidth:56,flexShrink:0}}>{gInfo.label}</span>
-              <span style={{fontSize:15,fontWeight:600}}>🍽 {g.main||"（削除済み）"}</span>
+            {lunchMain&&<>
+              <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:2}}>
+                <span style={{fontSize:11,fontWeight:700,color:gInfo.color,minWidth:56,flexShrink:0}}>{gInfo.label}</span>
+                <span style={{fontSize:13,color:"#757575"}}>☀️ {lunchMain}</span>
+              </div>
+              {lunchIng.length>0&&<div style={{fontSize:11,color:"#BDBDBD",marginLeft:64,marginBottom:4}}>食材：{lunchIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
+            </>}
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:3,marginTop:lunchMain?4:0}}>
+              <span style={{fontSize:11,fontWeight:700,color:gInfo.color,minWidth:56,flexShrink:0}}>{lunchMain?"":gInfo.label}</span>
+              <span style={{fontSize:15,fontWeight:600}}>🌙 {dinnerMain||"（削除済み）"}</span>
             </div>
-            {(dishes||{})[g.main]?.recipeUrl&&<div style={{fontSize:11,color:"#1565C0",marginLeft:64,marginBottom:2}}>🔗 <a href={(dishes||{})[g.main].recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0"}}>{(dishes||{})[g.main].recipeUrl}</a></div>}
+            {(dishes||{})[dinnerMain]?.recipeUrl&&<div style={{fontSize:11,color:"#1565C0",marginLeft:64,marginBottom:2}}>🔗 <a href={(dishes||{})[dinnerMain].recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0"}}>{(dishes||{})[dinnerMain].recipeUrl}</a></div>}
             {mainIng.length>0&&<div style={{fontSize:11,color:"#9E9E9E",marginLeft:64,marginBottom:3}}>食材：{mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
-            {(g.sides||[]).map((side,si)=>{
-              const sideIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
+            {(g.dinner?.sides||g.sides||[]).map((side,si)=>{
+              const sideIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`dinner_side${si+1}`&&!i.excluded&&i.type==="ingredient");
               return(<div key={si} style={{marginLeft:64}}>
                 <span style={{fontSize:12,color:"#757575"}}>🥗 {side}</span>
                 {(dishes||{})[side]?.recipeUrl&&<div style={{fontSize:11,color:"#1565C0"}}>🔗 <a href={(dishes||{})[side].recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0"}}>{(dishes||{})[side].recipeUrl}</a></div>}
