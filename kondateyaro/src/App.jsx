@@ -74,6 +74,7 @@ input,textarea{-webkit-appearance:none;outline:none;font-family:inherit;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes bounce{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
 @keyframes fadeup{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes zoomIn{from{transform:scale(1);opacity:0.6}to{transform:scale(1.18);opacity:0.85}}
 .fade-in{animation:fadeIn .25s ease}
 `;
 
@@ -234,35 +235,53 @@ async function buildMenu(st,wantedIngredients=""){
     const[d,m]=k.split("_"); return `${DAY_JP[d]}曜${m==="lunch"?"昼":"夜"}`;
   }).join("、")||"なし";
 
-  const sys=`家庭料理の週間献立作成AI。純粋なJSONのみ返すこと。前置き不要。
-グループ（同じグループは同一献立）: ${groups.map(g=>g.label).join("、")}
-冷凍食品固定の枠: ${frozenInfo}（これらはmain="冷凍食品"で固定）
-NG食材（絶対に使わない）: ${ngFoods}
-除外（直近${rotW}週）: ${recent}
-過去評価（高評価優先）: ${scoreInfo}
-登録レシピ（優先）: ${customList}${wantedLine}
-ルール:
-・夜はmain1品+sides2品（副菜は家庭的なもの：ひじき煮・ポテサラ・冷奴・卵焼き等）
-・汁物設定がfalseのグループは副菜に味噌汁・豚汁・スープ・お吸い物などの汁物を絶対に含めない
-・土日夜は丼もの（親子丼・牛丼・カツ丼等）
-・同じ料理を週内で繰り返さない
-・catは「肉/魚/卵・豆腐/野菜メイン/麺・パスタ/丼/その他」
-・diffは1=かんたん/2=ふつう/3=本格
-
-出力形式（JSON配列・グループ数分）:
-[{"days":["monday","wednesday","friday"],"main":"料理名","sides":["副菜1","副菜2"],"cat":"肉","diff":2},...]`;
-
-  const txt=await callAI(sys,`今週の献立。グループ: ${groups.map(g=>g.label).join("、")}（${servings}人家族）`,2000);
-  const clean=txt.replace(/```json|```/g,"").trim();
-  const groupData=JSON.parse(clean);
   const mealCfg=st.settings?.meal_config||INIT_SETTINGS.meal_config;
   const SOUP_PATTERN=/汁$|スープ$|お吸い物|汁物/;
 
-  // AIが返したグループ数と設定のグループ数を合わせる
-  // daysは設定側（groups）のものを使い、AIの料理名だけ採用する
+  // グループ情報を明示的に番号付きで渡す
+  const groupSpec=groups.map((g,i)=>`G${i+1}: ${g.label}（${g.days.includes("saturday")||g.days.includes("sunday")?"土日→丼もの必須":"平日料理"}）`).join("\n");
+
+  const sys=`家庭料理の週間献立作成AI。純粋なJSONのみ返すこと。前置き不要。
+
+【グループ一覧・必ず全${groups.length}個分返すこと】
+${groupSpec}
+
+冷凍食品固定: ${frozenInfo}
+NG食材: ${ngFoods}
+除外（直近${rotW}週）: ${recent}
+高評価（優先）: ${scoreInfo}
+登録レシピ（優先）: ${customList}${wantedLine}
+
+ルール:
+・各グループに必ず1つmainを設定する（絶対に省略・スキップしない）
+・mainは必ずタンパク質メインの料理（肉・魚・卵・豆腐料理など）。サラダ・和え物・漬物・酢の物はmainに設定しない
+・夜はmain1品+sides2品（副菜は家庭的なもの：ひじき煮・ポテサラ・冷奴・卵焼き等）
+・${mealCfg.dinner?.soup?"汁物あり":"副菜に汁物（味噌汁・豚汁・スープ等）を含めない"}
+・土日グループはmainを必ず丼もの（親子丼・牛丼・カツ丼・天丼・海鮮丼等）にする
+・同じ料理を複数グループで使わない
+・catは「肉/魚/卵・豆腐/野菜メイン/麺・パスタ/丼/その他」
+・diffは1=かんたん/2=ふつう/3=本格
+
+出力形式（必ず${groups.length}要素の配列）:
+[{"main":"料理名","sides":["副菜1","副菜2"],"cat":"肉","diff":2},...]
+※daysフィールドは不要。配列の順番がG1,G2,...に対応する。`;
+
+  // 最大2回試行
+  let groupData=null;
+  for(let attempt=0; attempt<2; attempt++){
+    const txt=await callAI(sys,`グループ${groups.length}個分の献立を作成してください。`,2000);
+    const clean=txt.replace(/```json|```/g,"").trim();
+    const parsed=JSON.parse(clean);
+    if(parsed.length>=groups.length){ groupData=parsed; break; }
+  }
+  if(!groupData||groupData.length<groups.length){
+    throw new Error("献立の生成に失敗しました。もう一度「これでも食らえ」を押してください。");
+  }
+
+  // daysは設定側のものを使い、AIの料理名だけ採用する
   const merged=groups.map((g,i)=>{
-    const aiG=groupData[i]||groupData[0]||{};
-    const sides=(aiG.sides||[]).filter(s=>mealCfg.dinner?.soup?true:!SOUP_PATTERN.test(s));
+    const aiG=groupData[i]||{};
+    const sides=(aiG.sides||[]).filter(s=>!SOUP_PATTERN.test(s)||mealCfg.dinner?.soup);
     return {days:g.days, main:aiG.main||"", sides, cat:aiG.cat||"", diff:aiG.diff||2, score:null};
   });
 
@@ -445,9 +464,14 @@ function Empty({icon,msg}){
   </div>);
 }
 function Overlay({msg}){
-  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,flexDirection:"column",gap:14}}>
-    <div style={{width:32,height:32,border:"3px solid rgba(255,255,255,.3)",borderTop:"3px solid white",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
-    <div style={{color:"white",fontSize:14}}>{msg}</div>
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,flexDirection:"column",gap:14,overflow:"hidden"}}>
+    {/* ズームインするアイコン背景 */}
+    <img src="/icon-512.png" alt="" style={{position:"absolute",width:"85%",maxWidth:360,opacity:0,animation:"zoomIn 3s ease-in-out infinite alternate",pointerEvents:"none",borderRadius:"22%"}}/>
+    {/* スピナーとメッセージ */}
+    <div style={{position:"relative",zIndex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:14}}>
+      <div style={{width:36,height:36,border:"3px solid rgba(255,255,255,.3)",borderTop:"3px solid white",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>
+      <div style={{color:"white",fontSize:14,fontWeight:500,textShadow:"0 1px 4px rgba(0,0,0,.8)"}}>{msg}</div>
+    </div>
   </div>);
 }
 function Toast({msg}){
@@ -537,17 +561,29 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
     finally{setBusy(false);setBMsg("");}
   };
 
-  const handleChangeMain=async(gi,oldMain,wantedForChange="",excludeCat="")=>{
+  const handleChangeMain=async(gi,slotKey,oldDish,wantedForChange="",excludeCat="")=>{
     setBusy(true);setBMsg("別の料理を提案中...");
     try{
-      const current=plan.groups.map(g=>g.main).join("、");
+      const isMain=slotKey==="main";
       const ngFoods=(st.settings.ng_foods||[]).join("、")||"なし";
       const wLine=wantedForChange.trim()?`\n使いたい食材: ${wantedForChange.trim()}`:"";
       const exLine=excludeCat?`\nカテゴリ「${excludeCat}」は除外`:"";
-      const sys=`料理名を1つだけ返してください。余計なテキスト不要。NG食材: ${ngFoods}${wLine}${exLine}`;
-      const txt=await callAI(sys,`今週の献立は「${current}」です。「${oldMain}」の代わりになる家庭的な料理を1つ提案してください。`);
-      const newMain=txt.trim().replace(/[「」]/g,"");
-      save({plan:{...plan,groups:plan.groups.map((g,i)=>i===gi?{...g,main:newMain}:g)}});
+      const allDishes=plan.groups.flatMap(g=>[g.main,...(g.sides||[])]).filter(Boolean).join("、");
+      const roleNote=isMain
+        ?"主菜（タンパク質メインの料理。肉・魚・卵・豆腐料理。サラダ・和え物・漬物は不可）"
+        :"副菜（家庭的なおかず。ひじき煮・ポテサラ・冷奴・卵焼き等）";
+      const sys=`料理名を1つだけ返してください。余計なテキスト不要。役割: ${roleNote}。NG食材: ${ngFoods}${wLine}${exLine}`;
+      const txt=await callAI(sys,`今週の献立は「${allDishes}」です。「${oldDish}」の代わりを1つ提案してください。`);
+      const newDish=txt.trim().replace(/[「」]/g,"");
+      const newGroups=plan.groups.map((g,i)=>{
+        if(i!==gi) return g;
+        if(slotKey==="main") return {...g,main:newDish};
+        const sideIdx=Number(slotKey.replace("side",""));
+        const sides=[...(g.sides||[])];
+        sides[sideIdx]=newDish;
+        return {...g,sides};
+      });
+      save({plan:{...plan,groups:newGroups}});
     }catch(e){alert("エラー: "+e.message);}
     finally{setBusy(false);setBMsg("");}
   };
@@ -674,7 +710,7 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
 
   const doChange=()=>{
     if(!changeSheet) return;
-    onChangeMain(gi, changeSheet.name, changeWanted, excludeCat);
+    onChangeMain(gi, changeSheet.slotKey, changeSheet.name, changeWanted, excludeCat);
     setChangeSheet(null); setChangeWanted(""); setExcludeCat("");
   };
 
