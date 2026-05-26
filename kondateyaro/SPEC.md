@@ -34,10 +34,17 @@
     groups: [
       {
         days: ["monday","wednesday","friday"],  // 設定側のdaysを使用（AI出力のdaysは無視）
-        main: "生姜焼き",                        // 肉か魚料理のみ
-        sides: ["ひじき煮", "ポテトサラダ"],
-        cat: "肉",
-        diff: 2,   // 1=かんたん 2=ふつう 3=本格
+        lunch: {
+          main: "焼きそば",  // 一品完結のみ（焼きそば・丼・パスタ等）
+          cat: "麺・パスタ",
+          diff: 1
+        },
+        dinner: {
+          main: "生姜焼き",  // 肉か魚料理のみ
+          sides: ["ひじき煮", "ポテトサラダ"],
+          cat: "肉",
+          diff: 2
+        },
         score: null
       }, ...
     ]
@@ -241,19 +248,20 @@ day_groups: { monday:1, tuesday:2, wednesday:1, thursday:2, friday:1, saturday:3
 
 ### 献立生成（buildMenu）
 - グループを番号付きで明示（「G1: 月・水、G2: 火・木...」）
-- mainは必ず肉か魚料理のみ（サラダ・和え物等は不可）
-- 土日グループはmain必ず丼もの
-- 汁物設定に応じて副菜フィルタリング
+- **昼食（lunch）**: 一品完結のみ（焼きそば・丼・パスタ・チャーハン等）。sidesなし
+- **夕食（dinner）**: mainは肉か魚料理のみ。土日グループは丼もの必須
+- 同日の昼夜で同じ食材をメインにしない
+- 汁物設定（meal_config.dinner.soup）に応じて副菜フィルタリング
 - AIの返すdaysフィールドは無視し、設定側のdaysを使用
 - グループ数不足の場合は最大2回リトライ、それでも失敗したらエラー表示
-- 冷凍食品固定枠: AIプロンプトへのテキスト指示のみ（`isFrozen`関数は定義済みだが強制適用は**未実装**）
+- 冷凍食品強制適用: `frozen_meals` 設定に基づき昼・夜それぞれ強制上書き（土日の自動固定はなし）
 
 ### 料理の変更（handleChangeMain）
-- `slotKey`（"main"/"side0"/"side1"）で変更対象スロットを特定（0始まり）
-  - slotKey "side0" → `g.sides[0]`（副菜1）
-  - slotKey "side1" → `g.sides[1]`（副菜2）
-  - ※ `buildShoppingItems` の `dishType` は "side1"/"side2"（1始まり）で別物
-- mainの場合は肉か魚料理のみ提案
+- `slotKey` で変更対象スロットを特定:
+  - `"lunch_main"` → `g.lunch.main`（昼食・一品完結のみ提案）
+  - `"dinner_main"` → `g.dinner.main`（肉か魚料理のみ提案）
+  - `"dinner_side0"` → `g.dinner.sides[0]`（副菜1）
+  - `"dinner_side1"` → `g.dinner.sides[1]`（副菜2）
 - 他のグループ・他のスロットは変更しない
 
 ### 買い物リスト生成（buildShoppingItems）
