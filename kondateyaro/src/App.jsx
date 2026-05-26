@@ -1045,11 +1045,13 @@ function Step4({sess,plan,sortCats,save,notify,groups,dishes}){
               <span style={{fontSize:11,fontWeight:700,color:gInfo.color,minWidth:56,flexShrink:0}}>{gInfo.label}</span>
               <span style={{fontSize:15,fontWeight:600}}>🍽 {g.main||"（削除済み）"}</span>
             </div>
+            {(dishes||{})[g.main]?.recipeUrl&&<div style={{fontSize:11,color:"#1565C0",marginLeft:64,marginBottom:2}}>🔗 <a href={(dishes||{})[g.main].recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0"}}>{(dishes||{})[g.main].recipeUrl}</a></div>}
             {mainIng.length>0&&<div style={{fontSize:11,color:"#9E9E9E",marginLeft:64,marginBottom:3}}>食材：{mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
             {(g.sides||[]).map((side,si)=>{
               const sideIng=(sess.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
               return(<div key={si} style={{marginLeft:64}}>
                 <span style={{fontSize:12,color:"#757575"}}>🥗 {side}</span>
+                {(dishes||{})[side]?.recipeUrl&&<div style={{fontSize:11,color:"#1565C0"}}>🔗 <a href={(dishes||{})[side].recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0"}}>{(dishes||{})[side].recipeUrl}</a></div>}
                 {sideIng.length>0&&<div style={{fontSize:11,color:"#BDBDBD"}}>食材：{sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}</div>}
               </div>);
             })}
