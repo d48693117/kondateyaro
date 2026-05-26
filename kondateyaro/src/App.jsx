@@ -311,13 +311,16 @@ typeは"ingredient"か"seasoning"のみ。`;
   });
 }
 
-function buildLINEMessage(plan,session,sortCats){
+function buildLINEMessage(plan,session,sortCats,dishes){
   let msg="🍱 こんだて野郎\n";
   if(plan?.groups){
     msg+="\n📅 今週の献立\n";
     plan.groups.forEach((g,gi)=>{
       const label=g.days.map(d=>DAY_JP[d]).join("・");
       msg+=`\n【${label}】\n🍽 主菜: ${g.main}\n`;
+      // 登録済みレシピURL
+      const mainUrl=(dishes||{})[g.main]?.recipeUrl;
+      if(mainUrl) msg+=`  🔗 ${mainUrl}\n`;
       if(session?.items){
         const mainIng=session.items.filter(i=>i.groupIdx===gi&&i.dishType==="main"&&!i.excluded&&i.type==="ingredient");
         if(mainIng.length) msg+=`  食材: ${mainIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
@@ -325,6 +328,8 @@ function buildLINEMessage(plan,session,sortCats){
       (g.sides||[]).forEach((side,si)=>{
         const sideIng=(session?.items||[]).filter(i=>i.groupIdx===gi&&i.dishType===`side${si+1}`&&!i.excluded&&i.type==="ingredient");
         msg+=`🥗 副菜: ${side}\n`;
+        const sideUrl=(dishes||{})[side]?.recipeUrl;
+        if(sideUrl) msg+=`  🔗 ${sideUrl}\n`;
         if(sideIng.length) msg+=`  食材: ${sideIng.map(i=>`${i.name}${i.qty?` ${i.qty}`:""}`).join("、")}\n`;
       });
     });
@@ -794,7 +799,7 @@ function ShopScreen({st,save,notify,setFloor}){
         <div style={{padding:"0 16px"}}><BtnFull label="④ 確認・送信へ →" color="#0D47A1" onClick={()=>setStep(4)}/></div>
       </div>
     )}
-    {step===4&&<Step4 sess={sess} plan={st.plan} sortCats={st.settings.sort_cats} save={save} notify={notify} groups={deriveGroups(st.settings.day_groups)}/>}
+    {step===4&&<Step4 sess={sess} plan={st.plan} sortCats={st.settings.sort_cats} save={save} notify={notify} groups={deriveGroups(st.settings.day_groups)} dishes={st.dishes}/>}
   </div>);
 }
 
@@ -1015,15 +1020,15 @@ function Step3Swipe({sess,sortCats,setFloor,onDone}){
 }
 
 /* Step4: 確認送信 */
-function Step4({sess,plan,sortCats,save,notify,groups}){
+function Step4({sess,plan,sortCats,save,notify,groups,dishes}){
   const included=[...(sess.items||[]).filter(i=>!i.excluded),...(sess.dailyGoods||[]).filter(i=>i.selected!==false)];
 
   const handleSend=async()=>{
-    const msg=buildLINEMessage(plan,sess,sortCats||[]);
+    const msg=buildLINEMessage(plan,sess,sortCats||[],dishes);
     await notify(msg,true);
   };
   const handleCopy=async()=>{
-    const msg=buildLINEMessage(plan,sess,sortCats||[]);
+    const msg=buildLINEMessage(plan,sess,sortCats||[],dishes);
     try{ await navigator.clipboard.writeText(msg); notify("✅ クリップボードにコピーしました！"); }
     catch(e){ alert("コピーに失敗しました"); }
   };
