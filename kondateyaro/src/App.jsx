@@ -100,15 +100,15 @@ async function callAI(sys,msg,max=1500){
 
 async function syncToSheets(url,token,data){
   if(!url) return;
-  const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain"},
-    body:JSON.stringify({token:token||"",data})});
+  const r=await fetch("/api/sheets",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({gasUrl:url,token:token||"",data})});
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const d=await r.json();
   if(d.error) throw new Error(d.error);
 }
 async function loadFromSheets(url,token){
   if(!url) return null;
-  const r=await fetch(`${url}?token=${encodeURIComponent(token||"")}`);
+  const r=await fetch(`/api/sheets?gasUrl=${encodeURIComponent(url)}&token=${encodeURIComponent(token||"")}`);
   if(!r.ok) return null;
   const d=await r.json();
   if(d.error) throw new Error(d.error);
