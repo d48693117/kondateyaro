@@ -1261,7 +1261,7 @@ function MealConfigEditor({mealConfig,onChange}){
 function CustomRecipesEditor({customRecipes,onChange,notify}){
   const [form,setForm]=useState({name:"",ingredients:"",url:"",score:""});
   const [showForm,setShowForm]=useState(false);
-  const recipes=customRecipes||[];
+  const recipes=Array.isArray(customRecipes)?customRecipes:[];
 
   const add=()=>{
     if(!form.name.trim()){alert("料理名を入力してください");return;}
@@ -1328,7 +1328,18 @@ function SettingsScreen({st,save,setBusy,setBMsg,notify}){
     setBusy(true);setBMsg("データを読み込み中...");
     try{
       const remote=await loadFromSheets(s.sheets_url,s.sheets_token);
-      if(remote){ save({...remote}); notify("✅ データを読み込みました！"); }
+      if(remote){
+        // 配列であるべきフィールドを安全化
+        if(!Array.isArray(remote.customRecipes)) remote.customRecipes=[];
+        if(!Array.isArray(remote.dailyGoods)) remote.dailyGoods=[];
+        if(remote.settings){
+          if(!Array.isArray(remote.settings.ng_foods)) remote.settings.ng_foods=[];
+          if(!Array.isArray(remote.settings.frozen_meals)) remote.settings.frozen_meals=[];
+          if(!Array.isArray(remote.settings.sort_cats)) remote.settings.sort_cats=INIT_SETTINGS.sort_cats;
+          if(!Array.isArray(remote.settings.recipe_sites)) remote.settings.recipe_sites=INIT_SETTINGS.recipe_sites;
+        }
+        save({...remote}); notify("✅ データを読み込みました！");
+      }
       else alert("データがありませんでした");
     }catch(e){alert("エラー: "+e.message);}
     finally{setBusy(false);setBMsg("");}
@@ -1492,7 +1503,14 @@ export default function App(){
   useEffect(()=>{
     const {sheets_url,sheets_token}=st.settings;
     if(!sheets_url) return;
-    (async()=>{ try{ const remote=await loadFromSheets(sheets_url,sheets_token); if(remote) setSt(prev=>({...prev,...remote,settings:{...prev.settings,...(remote.settings||{})}})); }catch(e){} })();
+    (async()=>{ try{
+      const remote=await loadFromSheets(sheets_url,sheets_token);
+      if(remote){
+        if(!Array.isArray(remote.customRecipes)) remote.customRecipes=[];
+        if(!Array.isArray(remote.dailyGoods)) remote.dailyGoods=[];
+        setSt(prev=>({...prev,...remote,settings:{...prev.settings,...(remote.settings||{})}}));
+      }
+    }catch(e){} })();
   },[]);
 
   const save=useCallback(patch=>{
