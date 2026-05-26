@@ -34,7 +34,7 @@ const INIT_SETTINGS = {
 
 const INIT_STATE = {
   plan:null, session:null, sortMem:{}, dailyGoods:[],
-  dishes:{}, customRecipes:[],
+  dishes:{}, customRecipes:{}, ingredientMem:{},
   settings:INIT_SETTINGS
 };
 
@@ -198,49 +198,116 @@ NG食材（絶対に使わない）: ${ngFoods}
   return {weekStart:weekStartStr(), groups:groupData.map(g=>({...g,score:null}))};
 }
 
-async function buildShoppingItems(plan,sortMem,settings){
+async function buildShoppingItems(plan,sortMem,settings,dishes,ingredientMem){
   const servings=settings?.servings||2;
-  // 空のグループを除外
   const validGroups=plan.groups.filter(g=>g.main);
+
+  // レシピURLが登録されている料理を特定
+  const urlDishes={};
+  validGroups.forEach((g,gi)=>{
+    const allDishes=[{key:"main",name:g.main},...(g.sides||[]).filter(s=>s).map((s,si)=>({key:`side${si+1}`,name:s}))];
+    allDishes.forEach(d=>{
+      const url=(dishes||{})[d.name]?.recipeUrl;
+      if(url) urlDishes[`${gi}_${d.key}`]={name:d.name,url};
+    });
+  });
+
+  // レシピURLから食材を取得（インスタ以外）
+  const urlIngredients={};
+  await Promise.all(Object.entries(urlDishes).map(async([key,{name,url}])=>{
+    if(url.includes("instagram.com")) return; // インスタはスキップ
+    try{
+      const r=await fetch(`/api/fetch-url?url=${encodeURIComponent(url)}`);
+      if(r.ok){
+        const text=await r.text();
+        const sys=`食材リストをJSONで返すこと。前置き不要。形式: [{"name":"食材名","qty":"量","type":"ingredient"}]`;
+        const result=await callAI(sys,`このレシピページから食材リストを抽出: ${text.slice(0,3000)}`);
+        const clean=result.replace(/```json|```/g,"").trim();
+        urlIngredients[key]=JSON.parse(clean);
+      }
+    }catch(e){}
+  }));
+
   const groupInfo=validGroups.map((g,gi)=>{
     const dayCount=g.days.length;
-    const dishes=[
+    const total=servings*dayCount;
+    const dishes2=[
       {dishType:"main",name:g.main},
       ...(g.sides||[]).filter(s=>s).map((s,si)=>({dishType:`side${si+1}`,name:s}))
     ];
-    return {groupIdx:gi, days:g.days.map(d=>DAY_JP[d]).join("・"),dayCount,servings,dishes};
+    return {groupIdx:gi, days:g.days.map(d=>DAY_JP[d]).join("・"),dayCount,servings,total,dishes:dishes2};
   });
+
   const sys=`買い物リスト作成AI。JSONのみ返すこと。前置き不要。
-各グループ・各料理ごとに食材をリストアップ。日数×人数で合計量を計算。
-塩・砂糖・サラダ油・水・ごま油・片栗粉は除外。食材は必要最小限に絞ること。
+各グループ・各料理ごとに食材をリストアップ。totalPersons（人数×日数）分の量を計算すること。
+肉・魚のメイン食材は1人前150g、卵は1人前1個を基準にtotalPersons倍で計算。野菜は1人前80g基準。
+塩・砂糖・サラダ油・水・ごま油・片栗粉は除外。食材名は量を含めず名前だけにすること。
 出力形式:
-[{"groupIdx":0,"dishType":"main","dishName":"料理名","name":"食材名","qty":"量","type":"ingredient"}]
+[{"groupIdx":0,"dishType":"main","dishName":"料理名","name":"食材名","qty":"量と単位","type":"ingredient"}]
 typeは"ingredient"か"seasoning"のみ。`;
   const txt=await callAI(sys,`献立: ${JSON.stringify(groupInfo)}`,4000);
-  // JSON修復: 途中で切れた場合に最後の完全なオブジェクトまでを使う
   let clean=txt.replace(/```json|```/g,"").trim();
-  let items;
+  let aiItems;
   try{
-    items=JSON.parse(clean);
+    aiItems=JSON.parse(clean);
   }catch(e){
-    // 末尾の不完全なオブジェクトを除去して再試行
     const lastBracket=clean.lastIndexOf("}");
     if(lastBracket>0){
       clean=clean.substring(0,lastBracket+1);
       if(!clean.endsWith("]")) clean+="]";
-      // 先頭にブラケットがなければ追加
       if(!clean.startsWith("[")) clean="["+clean;
-      items=JSON.parse(clean);
+      aiItems=JSON.parse(clean);
     } else {
       throw new Error("買い物リストの生成に失敗しました。もう一度お試しください。");
     }
   }
-  return items.map((item,i)=>({
-    id:`item_${Date.now()}_${i}`,
-    groupIdx:item.groupIdx??0, dishType:item.dishType||"main", dishName:item.dishName||"",
-    name:item.name, qty:item.qty||"", type:item.type||"ingredient",
-    floor:(sortMem||{})[item.name]||null, excluded:false
-  }));
+
+  // URLから取得した食材をマージ
+  Object.entries(urlIngredients).forEach(([key,items])=>{
+    const [gi,dishType]=key.split("_");
+    const group=validGroups[Number(gi)];
+    const dishName=dishType==="main"?group.main:(group.sides||[])[Number(dishType.replace("side",""))-1]||"";
+    items.forEach(item=>{
+      aiItems.push({groupIdx:Number(gi),dishType,dishName,name:item.name,qty:item.qty||"",type:item.type||"ingredient"});
+    });
+  });
+
+  // 食材名の正規化（名前に量が混入している場合を除去）
+  aiItems=aiItems.map(item=>({...item,name:item.name.replace(/[\d]+(g|kg|ml|l|本|個|枚|束|袋|缶|パック)/g,"").trim()})).filter(item=>item.name);
+
+  // 同一食材名をグループ・タイプ問わずまとめる（名前のみキー）
+  const merged={};
+  aiItems.forEach(item=>{
+    const key=item.name;
+    if(!merged[key]){
+      merged[key]={...item};
+    } else {
+      // 量を結合（数値は加算、それ以外は連結）
+      if(merged[key].qty && item.qty && merged[key].qty!==item.qty){
+        merged[key].qty=merged[key].qty+"・"+item.qty;
+      } else if(item.qty){
+        merged[key].qty=item.qty;
+      }
+    }
+  });
+
+  const iMem=ingredientMem||{};
+  return Object.values(merged).map((item,i)=>{
+    // ingredientMemに1人前量が記憶されていれば上書き計算
+    // そのアイテムが属するグループの日数を特定
+    const group=validGroups[item.groupIdx];
+    const dayCount=group?.days?.length||1;
+    const total=servings*dayCount;
+    const perServing=iMem[item.name];
+    const qty=perServing?`${Math.round(perServing*total*10)/10}${iMem[item.name+"_unit"]||"g"}`:item.qty;
+    return {
+      id:`item_${Date.now()}_${i}`,
+      groupIdx:item.groupIdx??0, dishType:item.dishType||"main", dishName:item.dishName||"",
+      name:item.name, qty, type:item.type||"ingredient",
+      floor:(sortMem||{})[item.name]||null,
+      excluded:item.type==="seasoning" // 調味料はデフォルトOFF
+    };
+  });
 }
 
 function buildLINEMessage(plan,session,sortCats){
@@ -379,7 +446,7 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
     if(!plan) return alert("先に献立を生成してください");
     setBusy(true);setBMsg("買い物リストを更新中...");
     try{
-      const items=await buildShoppingItems(plan,st.sortMem,st.settings);
+      const items=await buildShoppingItems(plan,st.sortMem,st.settings,st.dishes,st.ingredientMem);
       save({session:{weekStart:plan.weekStart,items,dailyGoods:st.session?.dailyGoods||[]}});
       notify("✅ 買い物リストを更新しました！");
     }catch(e){alert("エラー: "+e.message);}
@@ -477,7 +544,8 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
           const dishInfo=st.dishes?.[group.main];
           return(<GroupCard key={gi} group={group} gi={gi} gInfo={gInfo} dishInfo={dishInfo}
             onPickRecipe={setPickerDish} onChangeMain={handleChangeMain}
-            onDelete={()=>handleDeleteGroup(gi)} onSwap={()=>setSwapSrc(gi)} onDishSwap={handleDishSwap}/>);
+            onDelete={()=>handleDeleteGroup(gi)} onSwap={()=>setSwapSrc(gi)} onDishSwap={handleDishSwap}
+            onSaveDishInfo={(name,info)=>save({dishes:{...st.dishes,[name]:info}})}/>);
         })}
       </div>
     )}
@@ -485,10 +553,11 @@ function MenuScreen({st,save,setBusy,setBMsg,notify}){
 }
 
 /* 料理カード（変更ポップアップ内にフリーワード＋カテゴリ除外あり） */
-function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,onSwap,onDishSwap}){
+function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,onSwap,onDishSwap,onSaveDishInfo}){
   const [dragOver,setDragOver]=useState(null);
   // dishAction: {slotKey, name} → DishActionSheetを開く
   const [dishAction,setDishAction]=useState(null);
+  const [urlInput,setUrlInput]=useState("");
   // 変更シート用
   const [changeSheet,setChangeSheet]=useState(null); // {slotKey, name}
   const [changeWanted,setChangeWanted]=useState("");
@@ -567,6 +636,13 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
     {/* 一品アクションシート */}
     {dishAction&&(
       <BottomSheet title={"「"+dishAction.name+"」"} onClose={()=>setDishAction(null)}>
+        {/* 登録済みレシピURL表示 */}
+        {dishInfo?.recipeUrl&&(
+          <div style={{background:"#E8F5E9",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:12,color:"#2E7D32",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span>🔗 レシピURL登録済み</span>
+            <a href={dishInfo.recipeUrl} target="_blank" rel="noopener noreferrer" style={{color:"#1565C0",fontSize:11}}>開く</a>
+          </div>
+        )}
         <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8}}>
           {(INIT_SETTINGS.recipe_sites).map(site=>(
             <button key={site.id} onClick={()=>{window.open(site.url.replace("{dish}",encodeURIComponent(dishAction.name)),"_blank","noopener,noreferrer");setDishAction(null);}}
@@ -574,6 +650,19 @@ function GroupCard({group,gi,gInfo,dishInfo,onPickRecipe,onChangeMain,onDelete,o
               <span style={{fontSize:18}}>{site.id==="nadia"?"👩‍🍳":site.id==="cookpad"?"🍳":site.id==="youtube"?"▶️":"📸"}</span>{site.label}でレシピを探す
             </button>
           ))}
+          {/* レシピURL登録 */}
+          <div style={{background:"#F7F8FA",border:"1.5px solid #E0E0E0",borderRadius:10,padding:"10px 14px"}}>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>🔗 レシピURLを登録</div>
+            <div style={{display:"flex",gap:6}}>
+              <input value={urlInput} onChange={e=>setUrlInput(e.target.value)} placeholder="https://..." style={{flex:1,padding:"8px 10px",border:"1.5px solid #E0E0E0",borderRadius:7,fontSize:13}}/>
+              <button onClick={()=>{
+                if(!urlInput.trim()) return;
+                const prev=(dishInfo)||{scores:[],difficulty:0,lastServed:null};
+                onSaveDishInfo(dishAction.name,{...prev,recipeUrl:urlInput.trim()});
+                setUrlInput(""); setDishAction(null);
+              }} style={{padding:"8px 12px",background:"#1565C0",color:"white",border:"none",borderRadius:7,fontSize:13,fontWeight:700}}>保存</button>
+            </div>
+          </div>
           <button onClick={()=>{setDishAction(null);setChangeSheet({slotKey:dishAction.slotKey,name:dishAction.name});}}
             style={{padding:"13px 16px",background:"#E8F5E9",border:"1.5px solid #A5D6A7",borderRadius:10,textAlign:"left",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",gap:10}}>
             🔄 この料理を変更（AI提案）
@@ -694,7 +783,7 @@ function ShopScreen({st,save,notify,setFloor}){
     <div style={{display:"flex",background:"white",borderBottom:"2px solid #E3F2FD"}}>
       {["①食材確認","②日用品","③仕分け","④確認送信"].map((s,i)=>(<button key={i} onClick={()=>setStep(i+1)} style={{flex:1,padding:"11px 2px",border:"none",background:"none",fontSize:10,fontWeight:step===i+1?700:400,color:step===i+1?"#1565C0":"#9E9E9E",borderBottom:`2px solid ${step===i+1?"#1565C0":"transparent"}`,marginBottom:-2}}>{s}</button>))}
     </div>
-    {step===1&&<Step1 sess={sess} save={save}/>}
+    {step===1&&<Step1 sess={sess} save={save} ingredientMem={st.ingredientMem} servings={st.settings.servings||2} plan={st.plan}/>}
     {step===2&&<Step2 sess={sess} dailyGoods={st.dailyGoods} sortMem={st.sortMem} save={save}/>}
     {step===3&&(uncatCount>0
       ?<Step3Swipe sess={sess} sortCats={st.settings.sort_cats} setFloor={setFloor} onDone={()=>setStep(4)}/>
@@ -708,23 +797,86 @@ function ShopScreen({st,save,notify,setFloor}){
   </div>);
 }
 
-/* Step1: 食材確認 + 自由追加 */
-function Step1({sess,save}){
+/* Step1: 食材確認 + 自由追加 + 量編集 */
+function Step1({sess,save,ingredientMem,servings,plan}){
   const [newItem,setNewItem]=useState("");
+  const [editItem,setEditItem]=useState(null); // {id, name, qty, groupIdx}
+  const [editQty,setEditQty]=useState("");
+
   const toggle=id=>save({session:{...sess,items:sess.items.map(i=>i.id===id?{...i,excluded:!i.excluded}:i)}});
+
   const addItem=()=>{
     const name=newItem.trim(); if(!name) return;
     save({session:{...sess,items:[...sess.items,{id:`custom_${Date.now()}`,name,qty:"",type:"ingredient",groupIdx:0,dishType:"main",dishName:"",floor:null,excluded:false}]}});
     setNewItem("");
   };
+
+  const openEdit=it=>{ setEditItem(it); setEditQty(it.qty||""); };
+
+  const saveEdit=(savePerServing)=>{
+    if(!editItem) return;
+    // セッションのqtyを更新
+    const newItems=sess.items.map(i=>i.id===editItem.id?{...i,qty:editQty}:i);
+    if(savePerServing){
+      // 1人前量を計算して記憶
+      const group=plan?.groups?.[editItem.groupIdx];
+      const dayCount=group?.days?.length||1;
+      const total=(servings||2)*dayCount;
+      // 数値部分を抽出
+      const numMatch=editQty.match(/[\d.]+/);
+      const unitMatch=editQty.match(/[^\d.\s]+/);
+      if(numMatch && total>0){
+        const perServing=parseFloat(numMatch[0])/total;
+        const unit=unitMatch?unitMatch[0]:"g";
+        const newMem={...(ingredientMem||{}),[editItem.name]:perServing,[editItem.name+"_unit"]:unit};
+        save({session:{...sess,items:newItems},ingredientMem:newMem});
+      } else {
+        save({session:{...sess,items:newItems}});
+      }
+    } else {
+      save({session:{...sess,items:newItems}});
+    }
+    setEditItem(null);
+  };
+
   return(<div style={{padding:"12px 13px"}}>
-    <p style={{fontSize:13,color:"#9E9E9E",marginBottom:12,lineHeight:1.7}}>家にある食材・調味料をタップしてOFF（取り消し線）にしてください。</p>
+    {editItem&&(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:500}} onClick={()=>setEditItem(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,padding:"20px 16px 32px"}}>
+          <div style={{width:36,height:4,background:"#E0E0E0",borderRadius:2,margin:"0 auto 14px"}}/>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>「{editItem.name}」の量を編集</div>
+          <input value={editQty} onChange={e=>setEditQty(e.target.value)} autoFocus
+            style={{width:"100%",padding:"11px 12px",border:"2px solid #E0E0E0",borderRadius:8,fontSize:16,marginBottom:12}}/>
+          <button onClick={()=>saveEdit(true)} style={{display:"block",width:"100%",padding:"13px",background:"#2E7D32",color:"white",border:"none",borderRadius:10,fontSize:14,fontWeight:700,marginBottom:8}}>
+            保存して次回以降も自動計算（推奨）
+          </button>
+          <button onClick={()=>saveEdit(false)} style={{display:"block",width:"100%",padding:"13px",background:"#F5F5F5",color:"#616161",border:"1px solid #E0E0E0",borderRadius:10,fontSize:14,fontWeight:600,marginBottom:8}}>
+            今回だけ変更
+          </button>
+          <button onClick={()=>setEditItem(null)} style={{width:"100%",padding:10,border:"none",background:"none",color:"#9E9E9E",fontSize:14}}>キャンセル</button>
+        </div>
+      </div>
+    )}
+    <p style={{fontSize:13,color:"#9E9E9E",marginBottom:12,lineHeight:1.7}}>
+      食材はON・調味料はOFF（家にあるため）がデフォルトです。タップで切替、長押しで量を編集できます。
+    </p>
     {[["ingredient","🥩 食材"],["seasoning","🫙 調味料"]].map(([type,label])=>{
       const items=(sess.items||[]).filter(i=>i.type===type); if(!items.length) return null;
       return(<div key={type} style={{marginBottom:14}}>
         <Lbl>{label}</Lbl>
         <div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:6}}>
-          {items.map(it=>(<button key={it.id} onClick={()=>toggle(it.id)} style={{padding:"7px 13px",borderRadius:20,border:`2px solid ${it.excluded?"#E0E0E0":"#1565C0"}`,background:it.excluded?"#F5F5F5":"#E3F2FD",color:it.excluded?"#BDBDBD":"#1565C0",fontSize:13,fontWeight:500,textDecoration:it.excluded?"line-through":"none"}}>{it.name}{it.qty?` (${it.qty})`:""}</button>))}
+          {items.map(it=>(<button key={it.id}
+            onClick={()=>toggle(it.id)}
+            onContextMenu={e=>{e.preventDefault();openEdit(it);}}
+            onPointerDown={e=>{
+              const t=setTimeout(()=>openEdit(it),600);
+              e.currentTarget._longPressTimer=t;
+            }}
+            onPointerUp={e=>clearTimeout(e.currentTarget._longPressTimer)}
+            onPointerLeave={e=>clearTimeout(e.currentTarget._longPressTimer)}
+            style={{padding:"7px 13px",borderRadius:20,border:`2px solid ${it.excluded?"#E0E0E0":"#1565C0"}`,background:it.excluded?"#F5F5F5":"#E3F2FD",color:it.excluded?"#BDBDBD":"#1565C0",fontSize:13,fontWeight:500,textDecoration:it.excluded?"line-through":"none"}}>
+            {it.name}{it.qty?` (${it.qty})`:""}
+          </button>))}
         </div>
       </div>);
     })}
